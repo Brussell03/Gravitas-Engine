@@ -1,0 +1,191 @@
+[
+	{
+		"bodyIdentifier": "Sol",
+		"celestial": true,
+		"radius": 6.9634e+08,
+		"vehicleModel": {
+			"mass": 1.9885e+30,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [0.0, 0.0, 0.0],
+			"velocity": [0.0, 0.0, 0.0],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Mercury",
+		"celestial": true,
+		"radius": 2.4397e+06,
+		"vehicleModel": {
+			"mass": 3.3011e+23,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [23.7e9, -6.9e9, -61.2e9],
+			"velocity": [44.3e3, -2.1e3, 15.6e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Venus",
+		"celestial": true,
+		"radius": 6.0518e+06,
+		"vehicleModel": {
+			"mass": 4.8675e+24,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [85.8e9, -5.3e9, -66.8e9],
+			"velocity": [25.3e3, -1.9e3, 26.6e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Earth",
+		"celestial": true,
+		"radius": 6.3710e+06,
+		"vehicleModel": {
+			"mass": 5.9724e+24,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [122.3e9, 0.0e9, 89.3e9],
+			"velocity": [-19.3e3, 0.0, 22.0e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Mars",
+		"celestial": true,
+		"radius": 3.3895e+06,
+		"vehicleModel": {
+			"mass": 6.4171e+23,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [207.2e9, -2.5e9, 107.0e9],
+			"velocity": [-11.9e3, 0.8e3, 21.6e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Jupiter",
+		"celestial": true,
+		"radius": 6.9911e+07,
+		"vehicleModel": {
+			"mass": 1.8982e+27,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [703.1e9, -13.0e9, 351.4e9],
+			"velocity": [-6.6e3, 0.2e3, 12.3e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Saturn",
+		"celestial": true,
+		"radius": 5.8232e+07,
+		"vehicleModel": {
+			"mass": 5.6834e+26,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [1054.3e9, -31.3e9, 1098.2e9],
+			"velocity": [-7.2e3, 0.3e3, 6.7e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Uranus",
+		"celestial": true,
+		"radius": 2.5362e+07,
+		"vehicleModel": {
+			"mass": 8.6813e+25,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [2937.1e9, -40.5e9, 715.4e9],
+			"velocity": [-1.6e3, 0.0, 6.4e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Neptune",
+		"celestial": true,
+		"radius": 2.4622e+07,
+		"vehicleModel": {
+			"mass": 1.0241e+26,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [1495.2e9, 48.6e9, -4254.8e9],
+			"velocity": [5.1e3, -0.1e3, 1.8e3],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 0.001, 0.0]
+		}
+	}
+]

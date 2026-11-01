@@ -1,0 +1,206 @@
+[
+	{
+		"bodyIdentifier": "Sol",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 1.989e30,
+			"radius": 696000000,
+			"inertiaTensor": 3.854e47,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [0.0, 0.0],
+			"velocity": [0.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 7.292e-5
+		}
+	},
+	{
+		"bodyIdentifier": "Mercury",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 3.285e23,
+			"radius": 2439700.0,
+			"inertiaTensor": 1.95e35,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [57910000000.0, 0.0],
+			"velocity": [0.0, 47870.0],
+			"orientation": 0.0,
+			"angularVelocity": 1.24e-6
+		}
+	},
+	{
+		"bodyIdentifier": "Venus",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 4.867e24,
+			"radius": 6051800.0,
+			"inertiaTensor": 7.13e37,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [108200000000.0, 0.0],
+			"velocity": [0.0, 35020.0],
+			"orientation": 0.0,
+			"angularVelocity": -2.99e-7
+		}
+	},
+	{
+		"bodyIdentifier": "Earth",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 5.97219e24,
+			"radius": 6371000.0,
+			"inertiaTensor": 9.7e37,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [150400000000.0, 0.0],
+			"velocity": [0.0, 29710.0],
+			"orientation": 0.0,
+			"angularVelocity": 7.292e-5
+		}
+	},
+	{
+		"bodyIdentifier": "Moon",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 7.342e22,
+			"radius": 1737400.0,
+			"inertiaTensor": 8.87e34,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [150400000000.0, 384400000.0],
+			"velocity": [-1022.0, 29710.0],
+			"orientation": 0.0,
+			"angularVelocity": 2.66e-6
+		}
+	},
+	{
+		"bodyIdentifier": "Satellite 1",
+		"celestial": false,
+		"vehicleModel": {
+			"mass": 100.0,
+			"radius": 2.0,
+			"inertiaTensor": 200,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [150400000000.0, 6771000.0],
+			"velocity": [-7672.0, 29710.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		}
+	},
+	{
+		"bodyIdentifier": "Satellite 2",
+		"celestial": false,
+		"vehicleModel": {
+			"mass": 100.0,
+			"radius": 2.0,
+			"inertiaTensor": 200,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [150400000000.0, 7071000.0],
+			"velocity": [-7512.0, 29710.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		}
+	},
+	{
+		"bodyIdentifier": "Mars",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 6.39e23,
+			"radius": 3389500.0,
+			"inertiaTensor": 2.91e36,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [227900000000.0, 0.0],
+			"velocity": [0.0, 24070.0],
+			"orientation": 0.0,
+			"angularVelocity": 7.088e-5
+		}
+	},
+	{
+		"bodyIdentifier": "Jupiter",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 1.898e27,
+			"radius": 69911000.0,
+			"inertiaTensor": 4.14e42,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [778500000000.0, 0.0],
+			"velocity": [0.0, 13070.0],
+			"orientation": 0.0,
+			"angularVelocity": 1.76e-4
+		}
+	},
+	{
+		"bodyIdentifier": "Saturn",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 5.683e26,
+			"radius": 58232000.0,
+			"inertiaTensor": 8.54e41,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [1434000000000.0, 0.0],
+			"velocity": [0.0, 9690.0],
+			"orientation": 0.0,
+			"angularVelocity": 1.64e-4
+		}
+	},
+	{
+		"bodyIdentifier": "Uranus",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 8.681e25,
+			"radius": 25362000.0,
+			"inertiaTensor": 8.42e40,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [2871000000000.0, 0.0],
+			"velocity": [0.0, 6810.0],
+			"orientation": 0.0,
+			"angularVelocity": -1.01e-4
+		}
+	},
+	{
+		"bodyIdentifier": "Neptune",
+		"celestial": true,
+		"vehicleModel": {
+			"mass": 1.024e26,
+			"radius": 24622000.0,
+			"inertiaTensor": 9.94e40,
+			"linearDamping": [0.0, 0.0],
+			"angularDamping": 0.0
+		},
+		"initialState": {
+			"position": [4495000000000.0, 0.0],
+			"velocity": [0.0, 5430.0],
+			"orientation": 0.0,
+			"angularVelocity": 1.08e-4
+		}
+	}
+]

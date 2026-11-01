@@ -1,0 +1,452 @@
+[
+	{
+		"bodyIdentifier": "Earth",
+		"owned": true,
+		"vehicleModel": {
+			"mass": 5.97219e24,
+			"radius": 6371000.0,
+			"celestial": true
+		},
+		"initialState": {
+			"position": [0.0, 0.0],
+			"velocity": [0.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 7.2921e-5
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 2000000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 100000000.0
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Moon",
+		"owned": true,
+		"vehicleModel": {
+			"mass": 7.342e22,
+			"radius": 1737400.0,
+			"celestial": true
+		},
+		"initialState": {
+			"position": [0.0, 384400000.0],
+			"velocity": [-1022.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 2.66e-6
+		}
+	},
+	{
+		"bodyIdentifier": "Ship 5",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, 386400000.0],
+			"velocity": [1170.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Recon 1",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 8,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0, 20000000],
+			"velocity": [5000, 0]
+		},
+		"capabilities": [
+			{
+				"type": "optical",
+				"range": 5000000000.0,
+				"fieldOfViewDegrees": 20.0,
+				"sensitivity": 800000.0
+			},
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 100000.0
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 100000000,
+				"maxForce": 1.652e8
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Recon 2",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 8,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0, -20000000],
+			"velocity": [-5000, 0]
+		},
+		"capabilities": [
+			{
+				"type": "optical",
+				"range": 5000000000.0,
+				"fieldOfViewDegrees": 20.0,
+				"sensitivity": 800000.0
+			},
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 100000.0
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 100000000,
+				"maxForce": 1.652e8
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 1",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, -6771000.0],
+			"velocity": [7672.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 6",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, -6771100.0],
+			"velocity": [7672.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 7",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, -6771200.0],
+			"velocity": [7672.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 2",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [-6771000.0, 0.0],
+			"velocity": [0.0, -7672.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 3",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [6771000.0, 0],
+			"velocity": [0, 7672.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Ship 4",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 30.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, 6771000.0],
+			"velocity": [-7672.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 200000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1000.0
+			},
+			{
+				"type": "launch",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 0.1,
+				"fireSpeed": 5000,
+				"reloadTime": 10,
+				"ammo": 100
+			},
+			{
+				"type": "missile",
+				"projectileCompositionIndex": 0,
+				"projectileRadius": 4,
+				"reloadTime": 10,
+				"ammo": 40
+			},
+			{
+				"type": "navigation",
+				"targetOrientation": 0,
+				"maxTorque": 1000000000,
+				"maxForce": 4.354e9
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "Satellite 2",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 2.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, 7071000.0],
+			"velocity": [-7512.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 2000000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1.0
+			}
+		]
+	},
+	{
+		"bodyIdentifier": "M-Type Asteroid",
+		"owned": false,
+		"vehicleModel": {
+			"compositionIndex": 1,
+			"radius": 1000.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [-2000000.0, -10071000.0],
+			"velocity": [7512.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		}
+	}
+]

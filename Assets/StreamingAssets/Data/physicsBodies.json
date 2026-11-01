@@ -1,0 +1,82 @@
+[
+	{
+		"bodyIdentifier": "Star_1",
+		"celestial": true,
+		"radius": 1.0,
+		"vehicleModel": {
+			"mass": 10000000000000.0,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [0.0, 6.0, 0.0],
+			"velocity": [-5.0, 0.0, 3.0],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 1.0, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Star_2",
+		"celestial": true,
+		"radius": 1.0,
+		"vehicleModel": {
+			"mass": 10000000000000.0,
+			"inertiaTensor": [
+				[4e17, 0.0, 0.0],
+				[0.0, 4e17, 0.0],
+				[0.0, 0.0, 4e17]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [0.0, -6.0, 0.0],
+			"velocity": [5.0, 0.0, 3.0],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [0.0, 1.0, 0.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Test_Vehicle",
+		"vehicleModel": {
+			"mass": 5.0,
+			"inertiaTensor": [
+				[1.5125, 0.0, 0.0],
+				[0.0, 0.575, 0.0],
+				[0.0, 0.0, 1.5125]
+			],
+			"linearDamping": [0.0, 0.0, 0.0],
+			"angularDamping": [0.0, 0.0, 0.0]
+		},
+		"initialState": {
+			"position": [0.0, 0.0, 0.0],
+			"velocity": [0.0, 0.0, 0.0],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [1.0, 2.0, 3.0]
+		}
+	},
+	{
+		"bodyIdentifier": "Test_Collision",
+		"vehicleModel": {
+			"mass": 5.0,
+			"inertiaTensor": [
+				[1.5125, 0.0, 0.0],
+				[0.0, 0.575, 0.0],
+				[0.0, 0.0, 1.5125]
+			],
+			"linearDamping": [0.1, 0.1, 0.1],
+			"angularDamping": [0.1, 0.1, 0.1]
+		},
+		"initialState": {
+			"position": [7.0, 0.0, 0.0],
+			"velocity": [0.0, 0.0, 3.0],
+			"orientation": [0.0, 0.0, 0.0, 1.0],
+			"angularVelocity": [1.0, 2.0, 3.0]
+		}
+	}
+]
