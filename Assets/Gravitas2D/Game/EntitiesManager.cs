@@ -25,6 +25,8 @@ namespace GravitasDemo
 		private readonly HashSet<Entity> _visibleEntities = new HashSet<Entity>();
 		private readonly HashSet<Entity> _navigableEntities = new HashSet<Entity>();
 		private readonly HashSet<Entity> _sensorEntities = new HashSet<Entity>();
+		private readonly HashSet<Entity> _autonomousEntitiesSet = new HashSet<Entity>();
+		private readonly List<Entity> _autonomousEntitiesList = new List<Entity>();
 		private Dictionary<string, Entity> _entityLookup = new Dictionary<string, Entity>();
 		private Dictionary<PhysicsBody, Entity> _entityBodyLookup = new Dictionary<PhysicsBody, Entity>();
 
@@ -63,6 +65,7 @@ namespace GravitasDemo
 		public IReadOnlyCollection<Entity> VisibleEntities => _visibleEntities;
 		public IReadOnlyCollection<Entity> NavigableEntities => _navigableEntities;
 		public IReadOnlyCollection<Entity> SensorEntities => _sensorEntities;
+		public IReadOnlyCollection<Entity> AutonomousEntities => _autonomousEntitiesSet;
 		public Dictionary<string, Entity> EntityLookup => _entityLookup;
 		public Dictionary<PhysicsBody, Entity> EntityBodyLookup => _entityBodyLookup;
 		public bool IsInitialized => _isInitialized;
@@ -81,7 +84,8 @@ namespace GravitasDemo
 			_isInitialized = true;
 
 			// PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateSensors;
-			PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateNavigations;
+			PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateAutonomies;
+			// PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateNavigations;
 			PhysicsManager2D.Instance.OnSimulationOriginatedBody += EntityCreation.CreateWithExistingBody;
 		}
 
@@ -95,7 +99,8 @@ namespace GravitasDemo
 			if (PhysicsManager2D.Instance)
 			{
 				// PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateSensors;
-				PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateNavigations;
+				PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateAutonomies;
+				// PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateNavigations;
 				PhysicsManager2D.Instance.OnSimulationOriginatedBody -= EntityCreation.CreateWithExistingBody;
 			}
 		}
@@ -139,6 +144,8 @@ namespace GravitasDemo
 			_visibleEntities.Remove(entity);
 			_navigableEntities.Remove(entity);
 			_sensorEntities.Remove(entity);
+			_autonomousEntitiesSet.Remove(entity);
+			_autonomousEntitiesList.Remove(entity);
 			_entityLookup.Remove(entity.Name);
 			_entityBodyLookup.Remove(entity.PhysicsBody);
 			
@@ -163,6 +170,26 @@ namespace GravitasDemo
 			}
 		}
 
+		public void NotifyAutonomous(Entity entity, bool isAutonomyRunning)
+		{
+			if (entity == null) return;
+
+			if (isAutonomyRunning)
+			{
+				if (_autonomousEntitiesSet.Add(entity))
+				{
+					_autonomousEntitiesList.Add(entity);
+				}
+			}
+			else
+			{
+				if (_autonomousEntitiesSet.Remove(entity))
+				{
+					_autonomousEntitiesList.Remove(entity);
+				}
+			}
+		}
+
 		public EntityMapObject GetVisualForEntity(Entity entity)
 		{
 			return entity != null && _activeVisuals.TryGetValue(entity, out var bodyVisual) ? bodyVisual : null;
@@ -183,6 +210,8 @@ namespace GravitasDemo
 			_observedEntities.Clear();
 			_visibleEntities.Clear();
 			_navigableEntities.Clear();
+			_autonomousEntitiesSet.Clear();
+			_autonomousEntitiesList.Clear();
 			_sensorEntities.Clear();
 			_entityLookup.Clear();
 			_entityBodyLookup.Clear();
@@ -207,16 +236,28 @@ namespace GravitasDemo
 			if (_jobIsVisibleResults.IsCreated) _jobIsVisibleResults.Dispose();
 		}
 
-		private void UpdateNavigations()
-		{
-			if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _navigableEntities.Count == 0) return;
+		// private void UpdateNavigations()
+		// {
+		// 	if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _navigableEntities.Count == 0) return;
+		// 	float dt = PhysicsManager2D.Instance.ScaledPhysicsTimeStep;
 
+		// 	foreach (var entity in _navigableEntities)
+		// 	{
+		// 		if (entity == null || entity.IsDestroyed) continue;
+		// 		entity.EvaluateNavigation(dt);
+		// 	}
+		// }
+
+		private void UpdateAutonomies()
+		{
+			if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _autonomousEntitiesList.Count == 0) return;
 			float dt = PhysicsManager2D.Instance.ScaledPhysicsTimeStep;
 
-			foreach (var entity in _navigableEntities)
+			for (int i = _autonomousEntitiesList.Count - 1; i >= 0; i--)
 			{
+				var entity = _autonomousEntitiesList[i];
 				if (entity == null || entity.IsDestroyed) continue;
-				entity.EvaluateNavigation(dt);
+				entity.EvaluateAutonomy(dt);
 			}
 		}
 

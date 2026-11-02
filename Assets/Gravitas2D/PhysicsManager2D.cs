@@ -791,8 +791,6 @@ namespace Gravitas2D
 				return;
 			}
 
-			Debug.Log($"{_physicsBodies[bodyIndex].Name} collision status: {_isCollidableMap[bodyIndex]}");
-
 			PhysicsBody targetBody = _physicsBodies[bodyIndex];
 			if (!_bodiesToRemove.Contains(targetBody))
 			{

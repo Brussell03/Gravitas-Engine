@@ -761,6 +761,13 @@ namespace GravitasDemo.Interaction
 			return _pinnedMapObjects.Contains(selected) || selected == _hoveredMapObject;
 		}
 
+		public void StartMiningLoopOnSelected()
+		{
+			if (SelectedEntity == null) return;
+
+			SelectedEntity.StartMiningLoopHard();
+		}
+
 		#region Navigation
 
 		/// <summary>

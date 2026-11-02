@@ -328,11 +328,13 @@ namespace GravitasDemo.Interaction
 
 			List<IEntityCapability> capabilities = new List<IEntityCapability>()
 			{
-				NavigationCapability.Missile(targetEntity),
+				NavigationCapability.Missile,
 				WarheadCapability.Missile
 			};
 
-			EntityCreation.Create($"Missile {++_numMissileSpawned}", model, spawnPos, initialVelocity, _firingEntity.Orientation, 0, launcher.ProjectileCompositionIndex, true, EntityType.Missile, BodySpawnOptions.Default, capabilities);
+			var navTask = new NavigateTask(targetEntity);
+
+			EntityCreation.Create($"Missile {++_numMissileSpawned}", model, spawnPos, initialVelocity, _firingEntity.Orientation, 0, launcher.ProjectileCompositionIndex, true, EntityType.Missile, BodySpawnOptions.Default, capabilities, navTask);
 			launcher.Ammo--;
 		}
 

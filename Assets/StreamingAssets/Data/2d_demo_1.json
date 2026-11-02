@@ -435,6 +435,29 @@
 		]
 	},
 	{
+		"bodyIdentifier": "Mining Station",
+		"owned": true,
+		"vehicleModel": {
+			"compositionIndex": 0,
+			"radius": 500.0,
+			"celestial": false
+		},
+		"initialState": {
+			"position": [0.0, -8771000.0],
+			"velocity": [7000.0, 0.0],
+			"orientation": 0.0,
+			"angularVelocity": 0.0
+		},
+		"capabilities": [
+			{
+				"type": "radar",
+				"range": 2000000000.0,
+				"fieldOfViewDegrees": 360.0,
+				"sensitivity": 1.0
+			}
+		]
+	},
+	{
 		"bodyIdentifier": "M-Type Asteroid",
 		"owned": false,
 		"vehicleModel": {

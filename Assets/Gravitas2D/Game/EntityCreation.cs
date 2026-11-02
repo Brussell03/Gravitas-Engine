@@ -7,7 +7,7 @@ namespace GravitasDemo
 {
 	public static class EntityCreation
 	{
-		public static bool Create(string name, VehicleModel vehicleModel, double2 spawnPos, double2 spawnVel, float orientation, float angVel, int compositionIndex, bool isOwned, EntityType type, BodySpawnOptions options, List<IEntityCapability> capabilities = null)
+		public static bool Create(string name, VehicleModel vehicleModel, double2 spawnPos, double2 spawnVel, float orientation, float angVel, int compositionIndex, bool isOwned, EntityType type, BodySpawnOptions options, List<IEntityCapability> capabilities = null, IAutonomousTask initialTask = null)
 		{
 			double warheadEnergy = 0;
 			if (capabilities != null)
@@ -34,6 +34,8 @@ namespace GravitasDemo
 							entity.AddCapability(capability);
 						}
 					}
+
+					if (initialTask != null) entity.HandleNavigationTask(initialTask, false);
 
 					Debug.Log($"[{nameof(EntityCreation)}] Successfully created entity {entity.Name}");
 					return true;
