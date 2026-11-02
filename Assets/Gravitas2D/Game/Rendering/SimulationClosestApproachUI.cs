@@ -1,9 +1,10 @@
 using Gravitas2D;
+using GravitasDemo.Interaction;
 using TMPro;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	public class SimulationClosestApproachUI : MonoBehaviour
 	{

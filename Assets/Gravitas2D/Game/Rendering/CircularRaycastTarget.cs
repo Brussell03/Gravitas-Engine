@@ -1,7 +1,8 @@
+using GravitasDemo.Interaction;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	public class CircularRaycastTarget : Graphic
 	{

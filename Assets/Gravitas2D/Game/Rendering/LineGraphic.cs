@@ -4,7 +4,7 @@ using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	public enum LineType
 	{

@@ -18,19 +18,28 @@ namespace Gravitas2D
 			[ReadOnly] public NativeArray<GravitySourceData> GravitationalBodies;
 			[ReadOnly] public NativeList<int> GravitationalBodyIndices;
 			[ReadOnly] public NativeParallelMultiHashMap<int, int> SpatialMap;
-			[ReadOnly] public NativeArray<PhysicsBodyData> CurrentBodies;
+			[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
+			[ReadOnly] public NativeArray<VehicleModel> BodyVehicleModels;
+			[ReadOnly] public NativeArray<double2> BodyForces;
+			[ReadOnly] public NativeArray<double> BodyMoments;
 			[ReadOnly] public NativeArray<bool> CollisionTriggerMap;
 			[ReadOnly] public NativeArray<bool> CollidableMap;
 			
-			[WriteOnly, NativeDisableParallelForRestriction] public NativeArray<PhysicsBodyData> NextBodies;
+			[WriteOnly, NativeDisableParallelForRestriction] public NativeArray<StateVector> NextStateVectors;
 			[WriteOnly] public NativeQueue<CollisionEvent>.ParallelWriter CollisionQueue;
 
 			public void Execute(int index)
 			{
-				PhysicsBodyData currentBody = CurrentBodies[index];
+				StateVector currentStateVector = BodyStateVectors[index];
+				VehicleModel currentVehicleModel = BodyVehicleModels[index];
+				double2 currentForce = BodyForces[index];
+				double currentMoment = BodyMoments[index];
 
 				VelocityVerlet(
-					currentBody,
+					currentStateVector,
+					currentVehicleModel,
+					currentForce,
+					currentMoment,
 					GravitationalBodies,
 					GravitationalBodyIndices,
 					Time,
@@ -39,8 +48,8 @@ namespace Gravitas2D
 					out StateVector nextState
 				);
 
-				NextBodies[index] = new PhysicsBodyData(nextState, currentBody.VehicleModel, float2.zero, 0f);
-				CollisionDetection.EvaluateCollisions(index, currentBody, nextState, CollisionTriggerMap, CollidableMap, TimeStep, CellSize, CurrentBodies, SpatialMap, ref CollisionQueue);
+				NextStateVectors[index] = nextState;
+				CollisionDetection.EvaluateCollisions(index, currentStateVector, currentVehicleModel, nextState, CollisionTriggerMap, CollidableMap, TimeStep, CellSize, BodyStateVectors, BodyVehicleModels, SpatialMap, ref CollisionQueue);
 			}
 		}
 
@@ -54,19 +63,28 @@ namespace Gravitas2D
 			[ReadOnly] public NativeArray<GravitySourceData> GravitationalBodies;
 			[ReadOnly] public NativeList<int> GravitationalBodyIndices;
 			[ReadOnly] public NativeParallelMultiHashMap<int, int> SpatialMap;
-			[ReadOnly] public NativeArray<PhysicsBodyData> CurrentBodies;
+			[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
+			[ReadOnly] public NativeArray<VehicleModel> BodyVehicleModels;
+			[ReadOnly] public NativeArray<double2> BodyForces;
+			[ReadOnly] public NativeArray<double> BodyMoments;
 			[ReadOnly] public NativeArray<bool> CollisionTriggerMap;
 			[ReadOnly] public NativeArray<bool> CollidableMap;
 			
-			[WriteOnly, NativeDisableParallelForRestriction] public NativeArray<PhysicsBodyData> NextBodies;
+			[WriteOnly, NativeDisableParallelForRestriction] public NativeArray<StateVector> NextStateVectors;
 			[WriteOnly] public NativeQueue<CollisionEvent>.ParallelWriter CollisionQueue;
 
 			public void Execute(int index)
 			{
-				PhysicsBodyData currentBody = CurrentBodies[index];
+				StateVector currentStateVector = BodyStateVectors[index];
+				VehicleModel currentVehicleModel = BodyVehicleModels[index];
+				double2 currentForce = BodyForces[index];
+				double currentMoment = BodyMoments[index];
 
 				RungeKutta4(
-					currentBody,
+					currentStateVector,
+					currentVehicleModel,
+					currentForce,
+					currentMoment,
 					GravitationalBodies,
 					GravitationalBodyIndices,
 					Time,
@@ -75,8 +93,8 @@ namespace Gravitas2D
 					out StateVector nextState
 				);
 
-				NextBodies[index] = new PhysicsBodyData(nextState, currentBody.VehicleModel, float2.zero, 0f);
-				CollisionDetection.EvaluateCollisions(index, currentBody, nextState, CollisionTriggerMap, CollidableMap, TimeStep, CellSize, CurrentBodies, SpatialMap, ref CollisionQueue);
+				NextStateVectors[index] = nextState;
+				CollisionDetection.EvaluateCollisions(index, currentStateVector, currentVehicleModel, nextState, CollisionTriggerMap, CollidableMap, TimeStep, CellSize, BodyStateVectors, BodyVehicleModels, SpatialMap, ref CollisionQueue);
 			}
 		}
 
@@ -85,7 +103,10 @@ namespace Gravitas2D
 		/// </summary>
 		[BurstCompile]
 		public static void RungeKutta4(
-			in PhysicsBodyData body,
+			in StateVector stateVector,
+			in VehicleModel vehicleModel,
+			in double2 force,
+			in double moment,
 			in NativeArray<GravitySourceData> gravitationalBodies,
 			in NativeList<int> gravitationalBodiesIndices,
 			float time,
@@ -93,24 +114,22 @@ namespace Gravitas2D
 			int physicsBodyIndex,
 			out StateVector integratedState)
 		{
-			StateVector x = body.StateVector;
-			VehicleModel vehicleModel = body.VehicleModel;
 			double timeStep_d = (double)timeStep;
 
-			GravitationalAcceleration.CalculateGravitationalAcceleration(x.Position, gravitationalBodiesIndices, gravitationalBodies, physicsBodyIndex, out double2 currentGravity);
-			EquationsOfMotion.CalculateDerivative(time, x, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative k1);
-			CalculateIntermediateState(x, k1, timeStep * 0.5f, out StateVector state_k2);
+			GravitationalAcceleration.CalculateGravitationalAcceleration(stateVector.Position, gravitationalBodiesIndices, gravitationalBodies, physicsBodyIndex, out double2 currentGravity);
+			EquationsOfMotion.CalculateDerivative(time, stateVector, vehicleModel, currentGravity, force, moment, out StateDerivative k1);
+			CalculateIntermediateState(stateVector, k1, timeStep * 0.5f, out StateVector state_k2);
 
 			GravitationalAcceleration.CalculateGravitationalAcceleration(state_k2.Position, gravitationalBodiesIndices, gravitationalBodies, physicsBodyIndex, out currentGravity);
-			EquationsOfMotion.CalculateDerivative(time + 0.5f * timeStep, state_k2, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative k2);
-			CalculateIntermediateState(x, k2, timeStep * 0.5f, out StateVector state_k3);
+			EquationsOfMotion.CalculateDerivative(time + 0.5f * timeStep, state_k2, vehicleModel, currentGravity, force, moment, out StateDerivative k2);
+			CalculateIntermediateState(stateVector, k2, timeStep * 0.5f, out StateVector state_k3);
 
 			GravitationalAcceleration.CalculateGravitationalAcceleration(state_k3.Position, gravitationalBodiesIndices, gravitationalBodies, physicsBodyIndex, out currentGravity);
-			EquationsOfMotion.CalculateDerivative(time + 0.5f * timeStep, state_k3, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative k3);
-			CalculateIntermediateState(x, k3, timeStep, out StateVector state_k4);
+			EquationsOfMotion.CalculateDerivative(time + 0.5f * timeStep, state_k3, vehicleModel, currentGravity, force, moment, out StateDerivative k3);
+			CalculateIntermediateState(stateVector, k3, timeStep, out StateVector state_k4);
 
 			GravitationalAcceleration.CalculateGravitationalAcceleration(state_k4.Position, gravitationalBodiesIndices, gravitationalBodies, physicsBodyIndex, out currentGravity);
-			EquationsOfMotion.CalculateDerivative(time + timeStep, state_k4, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative k4);
+			EquationsOfMotion.CalculateDerivative(time + timeStep, state_k4, vehicleModel, currentGravity, force, moment, out StateDerivative k4);
 
 			// Linear components (Position and Velocity)
 			double2 positionChange = (timeStep_d / 6.0) * (k1.Velocity + 2.0 * k2.Velocity + 2.0 * k3.Velocity + k4.Velocity);
@@ -118,18 +137,18 @@ namespace Gravitas2D
 
 			// Angular Velocity - average the angular accelerations
 			float angularVelocityChange = (timeStep / 6.0f) * (k1.AngularAcceleration + 2.0f * k2.AngularAcceleration + 2.0f * k3.AngularAcceleration + k4.AngularAcceleration);
-			float nextAngularVelocity = x.AngularVelocity + angularVelocityChange;
+			float nextAngularVelocity = stateVector.AngularVelocity + angularVelocityChange;
 
 			// Orientation - average the angular velocities and integrate
 			// Effective angular velocity for the step (weighted average)
 			float effectiveAngularVelocity = (k1.AngularVelocity + 2.0f * k2.AngularVelocity + 2.0f * k3.AngularVelocity + k4.AngularVelocity) / 6.0f;
-			float nextOrientation = WrapAngle(x.Orientation + effectiveAngularVelocity * timeStep);
+			float nextOrientation = WrapAngle(stateVector.Orientation + effectiveAngularVelocity * timeStep);
 
 			// Calculate and store the next state in the array
 			integratedState = new StateVector
 			{
-				Position = x.Position + positionChange,
-				Velocity = x.Velocity + velocityChange,
+				Position = stateVector.Position + positionChange,
+				Velocity = stateVector.Velocity + velocityChange,
 				Orientation = nextOrientation,
 				AngularVelocity = nextAngularVelocity
 			};
@@ -140,7 +159,10 @@ namespace Gravitas2D
 		/// </summary>
 		[BurstCompile]
 		public static void VelocityVerlet(
-			in PhysicsBodyData body,
+			in StateVector stateVector,
+			in VehicleModel vehicleModel,
+			in double2 force,
+			in double moment,
 			in NativeArray<GravitySourceData> gravitationalBodies,
 			in NativeList<int> gravitationalBodiesIndices,
 			float time,
@@ -148,23 +170,21 @@ namespace Gravitas2D
 			int bodyIndex,
 			out StateVector integratedState)
 		{
-			StateVector x = body.StateVector;
-			VehicleModel vehicleModel = body.VehicleModel;
 			double timeStep_d = (double)timeStep;
 
-			GravitationalAcceleration.CalculateGravitationalAcceleration(x.Position, gravitationalBodiesIndices, gravitationalBodies, bodyIndex, out double2 currentGravity);
-			EquationsOfMotion.CalculateDerivative(time, x, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative currentDerivative);
+			GravitationalAcceleration.CalculateGravitationalAcceleration(stateVector.Position, gravitationalBodiesIndices, gravitationalBodies, bodyIndex, out double2 currentGravity);
+			EquationsOfMotion.CalculateDerivative(time, stateVector, vehicleModel, currentGravity, force, moment, out StateDerivative currentDerivative);
 			
 			double2 currentAccel = currentDerivative.Acceleration;
 			float currentAngularAccel = currentDerivative.AngularAcceleration;
 
 			// Half-step velocities
-			double2 velocityHalfStep = x.Velocity + 0.5 * timeStep_d * currentAccel;
-			float angularVelocityHalfStep = x.AngularVelocity + 0.5f * timeStep * currentAngularAccel;
+			double2 velocityHalfStep = stateVector.Velocity + 0.5 * timeStep_d * currentAccel;
+			float angularVelocityHalfStep = stateVector.AngularVelocity + 0.5f * timeStep * currentAngularAccel;
 
 			// Full-step positions/orientations
-			double2 nextPosition = x.Position + timeStep_d * velocityHalfStep;
-			float nextOrientation = WrapAngle(x.Orientation + angularVelocityHalfStep * timeStep);
+			double2 nextPosition = stateVector.Position + timeStep_d * velocityHalfStep;
+			float nextOrientation = WrapAngle(stateVector.Orientation + angularVelocityHalfStep * timeStep);
 
 			StateVector stateAtNextPos = new StateVector
 			{
@@ -175,7 +195,7 @@ namespace Gravitas2D
 			};
 
 			GravitationalAcceleration.CalculateGravitationalAcceleration(nextPosition, gravitationalBodiesIndices, gravitationalBodies, bodyIndex, out currentGravity);
-			EquationsOfMotion.CalculateDerivative(time + timeStep, stateAtNextPos, vehicleModel, currentGravity, body.ExternalForce, body.ExternalMoment, out StateDerivative nextDerivative);
+			EquationsOfMotion.CalculateDerivative(time + timeStep, stateAtNextPos, vehicleModel, currentGravity, force, moment, out StateDerivative nextDerivative);
 			
 			double2 nextAccel = nextDerivative.Acceleration;
 			float nextAngularAccel = nextDerivative.AngularAcceleration;

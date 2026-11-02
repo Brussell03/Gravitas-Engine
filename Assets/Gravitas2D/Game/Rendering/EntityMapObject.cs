@@ -1,10 +1,11 @@
 using Gravitas2D;
+using GravitasDemo.Interaction;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	public class EntityMapObject : MapObject
 	{

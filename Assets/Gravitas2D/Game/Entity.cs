@@ -49,6 +49,11 @@ namespace GravitasDemo
 		public static double MissileEnergy => 1.25e12;
 	}
 
+	public class AutonomyCapability : IEntityCapability
+	{
+		
+	}
+
 	public class NavigationCapability : IEntityCapability
 	{
 		public Entity OwnerEntity { get; set; }
@@ -1071,12 +1076,17 @@ namespace GravitasDemo
 		private PhysicsBody _physicsBody;
 		private bool _isOwned;
 		private string _name;
+		private double _dryMass;
+		private double _maxFuelMass;
+		private double _addedMass;
+		private float _fuelPercent;
 		private bool _isTracked = false;
 		private bool _isKnown;
 		private bool _isObserved;
 		private Entity _dominantEntity;
 		private EntityType _entityType;
 		private EntityGroup _group;
+		private int _numSensors;
 
 		private List<Entity> _observedEntities = new List<Entity>();
 		private List<IEntityCapability> _capabilities = new List<IEntityCapability>();
@@ -1098,6 +1108,9 @@ namespace GravitasDemo
 		public double2 Position => _physicsBody.Position;
 		public double2 Velocity => _physicsBody.Velocity;
 		public double Radius => _physicsBody.Radius;
+		public double Mass => _physicsBody.Mass;
+		public float Orientation => _physicsBody.Orientation;
+		public float AngularVelocity => _physicsBody.AngularVelocity;
 		public bool IsSpawned => !_physicsBody.IsPending;
 		public bool IsDestroyed => _physicsBody.IsDestroyed;
 		public bool IsCelestial => _physicsBody.IsCelestial;
@@ -1105,9 +1118,6 @@ namespace GravitasDemo
 		public bool IsVehicle => _entityType == EntityType.Vehicle;
 		public bool IsMissile => _entityType == EntityType.Missile;
 		public bool IsProjectile => _entityType == EntityType.Projectile;
-		public double Mass => _physicsBody.Mass;
-		public float Orientation => _physicsBody.Orientation;
-		public float AngularVelocity => _physicsBody.AngularVelocity;
 		public bool IsLauncher => _launchCapability != null;
 		public bool IsMissileLauncher => _missileCapability != null;
 		public bool IsNavigable => _navigationCapability != null;
@@ -1119,6 +1129,7 @@ namespace GravitasDemo
 		public CompositionProfile Composition => _physicsBody.Composition;
 		public EntityGroup Group => _group;
 		public bool InGroup => _group != null && !_group.IsDestroyed;
+		public int NumSensors => _numSensors;
 
 		public Entity(PhysicsBody body, string name, EntityType type, bool isOwned = false)
 		{
@@ -1205,6 +1216,11 @@ namespace GravitasDemo
 				_navigationCapability.OwnerEntity = this;
 			}
 
+			if (capability is SensorCapability senCap)
+			{
+				_numSensors++;
+			}
+
 			_capabilities.Add(capability);
 			EntitiesManager.Instance?.NotifyCapabilityAdded(this, capability);
 
@@ -1253,6 +1269,12 @@ namespace GravitasDemo
 			_dominantEntity = EntitiesManager.Instance.EntityLookup[parentSoI.Name];
 		}
 
+		private void UpdatePhysicsBodyMass()
+		{
+			double totalMass = _dryMass + _addedMass + _maxFuelMass * _fuelPercent;
+			_physicsBody.SetMass(totalMass);
+		}
+
 		/// <summary>
 		/// Queries all other entities visible to this entity's active sensors using the spatial hash map.
 		/// </summary>
@@ -1268,7 +1290,7 @@ namespace GravitasDemo
 
 			if (sensorList.Count == 0) return;
 
-			PhysicsManager2D.Instance.QuerySpatialHash((spatialMap, bodyDataArray, cellSize) =>
+			PhysicsManager2D.Instance.QuerySpatialHash((spatialMap, bodyStateVectors, cellSize) =>
 			{
 				double maxRange = 0.0;
 				for (int i = 0; i < sensorList.Count; i++)
@@ -1295,15 +1317,15 @@ namespace GravitasDemo
 								if (bodyIndex == _physicsBody.Index || evaluatedIndices.Contains(bodyIndex)) continue;
 								evaluatedIndices.Add(bodyIndex);
 
-								if (bodyIndex < 0 || bodyIndex >= bodyDataArray.Length) continue;
+								if (bodyIndex < 0 || bodyIndex >= bodyStateVectors.Length) continue;
 
-								PhysicsBodyData targetData = bodyDataArray[bodyIndex];
+								StateVector targetStateVector = bodyStateVectors[bodyIndex];
 								PhysicsBody targetBody = PhysicsManager2D.Instance.PhysicsBodies[bodyIndex];
 								if (targetBody == null || targetBody.IsDestroyed) continue;
 
 								double targetRadius = targetBody.Radius;
 								double targetMass = targetBody.Mass;
-								double2 targetPos = targetData.StateVector.Position;
+								double2 targetPos = targetStateVector.Position;
 								double2 dir = targetPos - Position;
 								double dist = math.length(dir);
 

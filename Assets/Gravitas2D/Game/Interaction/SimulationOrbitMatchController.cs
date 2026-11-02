@@ -1,11 +1,12 @@
 using System.Collections.Generic;
 using Gravitas2D;
+using GravitasDemo.Rendering;
 using TMPro;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	public class SimulationOrbitMatchController : MonoBehaviour
 	{

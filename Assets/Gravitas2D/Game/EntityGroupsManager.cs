@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Gravitas2D;
+using GravitasDemo.Rendering;
 using UnityEngine;
 
 namespace GravitasDemo

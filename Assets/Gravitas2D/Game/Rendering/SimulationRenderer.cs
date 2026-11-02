@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Gravitas2D;
+using GravitasDemo.Interaction;
 using TMPro;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -9,7 +10,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.Pool;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	[RequireComponent(typeof(SimulationInteractionController))]
 	public class SimulationRenderer : MonoBehaviour

@@ -38,24 +38,26 @@ namespace Gravitas2D
 			UpdateGravitationalBodiesArray();
 		}
 		
-		public static void ScheduleStateUpdateJob(in NativeArray<PhysicsBodyData> physicsBodyData, out JobHandle updateStateJobHandle)
+		public static void ScheduleStateUpdateJob(in NativeArray<StateVector> bodyStateVectors, in NativeArray<VehicleModel> bodyVehicleModels, out JobHandle updateStateJobHandle)
 		{
 			var updateStateJob = new UpdateGravitationalBodyStatesJob
 			{
 				GravitationalBodies = _gravitationalBodies,
-				PhysicsBodyData = physicsBodyData,
+				BodyStateVectors = bodyStateVectors,
+				BodyVehicleModels = bodyVehicleModels,
 				GravitationalBodyIndices = _gravitationalBodyIndices,
 				GravitationalConstant = _gravitationalConstant
 			};
 			updateStateJobHandle = updateStateJob.Schedule();
 		}
 		
-		public static void ScheduleStateUpdateJob(in NativeArray<PhysicsBodyData> physicsBodyData, in JobHandle dependsOn, out JobHandle updateStateJobHandle)
+		public static void ScheduleStateUpdateJob(in NativeArray<StateVector> bodyStateVectors, in NativeArray<VehicleModel> bodyVehicleModels, in JobHandle dependsOn, out JobHandle updateStateJobHandle)
 		{
 			var updateStateJob = new UpdateGravitationalBodyStatesJob
 			{
 				GravitationalBodies = _gravitationalBodies,
-				PhysicsBodyData = physicsBodyData,
+				BodyStateVectors = bodyStateVectors,
+				BodyVehicleModels = bodyVehicleModels,
 				GravitationalBodyIndices = _gravitationalBodyIndices,
 				GravitationalConstant = _gravitationalConstant
 			};
@@ -65,7 +67,8 @@ namespace Gravitas2D
 		[BurstCompile]
 		public struct UpdateGravitationalBodyStatesJob : IJob
 		{
-			[ReadOnly] public NativeArray<PhysicsBodyData> PhysicsBodyData;
+			[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
+			[ReadOnly] public NativeArray<VehicleModel> BodyVehicleModels;
 			[ReadOnly] public NativeList<int> GravitationalBodyIndices;
 			public NativeArray<GravitySourceData> GravitationalBodies;
 			public double GravitationalConstant;
@@ -74,11 +77,12 @@ namespace Gravitas2D
 			{
 				for (int i = 0; i < GravitationalBodies.Length; i++)
 				{
-					var data = PhysicsBodyData[GravitationalBodyIndices[i]];
+					var stateVector = BodyStateVectors[GravitationalBodyIndices[i]];
+					var vehicleModel = BodyVehicleModels[GravitationalBodyIndices[i]];
 					GravitationalBodies[i] = new GravitySourceData
 					{
-						Position = data.StateVector.Position,
-						Mu = GravitationalConstant * data.VehicleModel.Mass
+						Position = stateVector.Position,
+						Mu = GravitationalConstant * vehicleModel.Mass
 					};
 				}
 			}

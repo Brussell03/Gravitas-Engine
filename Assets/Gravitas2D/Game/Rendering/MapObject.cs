@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	[RequireComponent(typeof(CircularRaycastTarget))]
 	public abstract class MapObject : MonoBehaviour

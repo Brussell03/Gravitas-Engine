@@ -1,10 +1,11 @@
 using System.Collections.Generic;
 using Gravitas2D;
+using GravitasDemo.Interaction;
 using TMPro;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	[DefaultExecutionOrder(100)]
 	public class SensorRangeVisualizer : MonoBehaviour

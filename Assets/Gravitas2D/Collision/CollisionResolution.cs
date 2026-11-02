@@ -127,11 +127,12 @@ namespace Gravitas2D
 			[ReadOnly] public float TimeStep;
 			[ReadOnly] public float FractureRadiusThreshold;
 			
-			[ReadOnly] public NativeArray<PhysicsBodyData> CurrentBodies;
+			[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
+			[ReadOnly] public NativeArray<VehicleModel> BodyVehicleModels;
 			[ReadOnly] public NativeArray<float> BreakSpeeds;
 			[ReadOnly] public NativeArray<double> WarheadPayloadEnergies;
 
-			public NativeArray<PhysicsBodyData> NextBodies;
+			public NativeArray<StateVector> NextStateVectors;
 			
 			[ReadOnly] public NativeQueue<CollisionEvent> CollisionQueue;
 			public NativeQueue<int> BodiesToDestroy;
@@ -144,7 +145,7 @@ namespace Gravitas2D
 				NativeArray<CollisionEvent> collisions = CollisionQueue.ToArray(Allocator.Temp);
 				collisions.Sort(new CollisionEventComparer());
 
-				NativeArray<bool> resolvedBodies = new NativeArray<bool>(CurrentBodies.Length, Allocator.Temp);
+				NativeArray<bool> resolvedBodies = new NativeArray<bool>(BodyStateVectors.Length, Allocator.Temp);
 				float restitution = 0.1f;
 				const double GravitationalConstant = 6.67430e-11;
 
@@ -156,19 +157,21 @@ namespace Gravitas2D
 
 					if (resolvedBodies[indexA] || resolvedBodies[indexB]) continue;
 
-					PhysicsBodyData bodyA = CurrentBodies[indexA];
-					PhysicsBodyData bodyB = CurrentBodies[indexB];
+					StateVector stateVectorA = BodyStateVectors[indexA];
+					VehicleModel modelA = BodyVehicleModels[indexA];
+					StateVector stateVectorB = BodyStateVectors[indexB];
+					VehicleModel modelB = BodyVehicleModels[indexB];
 
 					float breakSpeedA = BreakSpeeds[indexA];
 					float breakSpeedB = BreakSpeeds[indexB];
 
-					double massA = bodyA.VehicleModel.Mass;
-					double massB = bodyB.VehicleModel.Mass;
-					double invMassA = bodyA.VehicleModel.InvMass;
-					double invMassB = bodyB.VehicleModel.InvMass;
+					double massA = modelA.Mass;
+					double massB = modelB.Mass;
+					double invMassA = modelA.InvMass;
+					double invMassB = modelB.InvMass;
 
-					double2 vA = bodyA.StateVector.Velocity;
-					double2 vB = bodyB.StateVector.Velocity;
+					double2 vA = stateVectorA.Velocity;
+					double2 vB = stateVectorB.Velocity;
 					
 					double2 normal = col.Normal;
 					double2 relativeVelocity = vB - vA;
@@ -202,12 +205,12 @@ namespace Gravitas2D
 
 					if (payloadA > 0f)
 					{
-						explosiveBonus += math.sqrt(2.0 * bodyA.VehicleModel.Mass * payloadA);
+						explosiveBonus += math.sqrt(2.0 * modelA.Mass * payloadA);
 						BodiesToDestroy.Enqueue(indexA);
 					}
 					if (payloadB > 0f)
 					{
-						explosiveBonus += math.sqrt(2.0 * bodyB.VehicleModel.Mass * payloadB);
+						explosiveBonus += math.sqrt(2.0 * modelB.Mass * payloadB);
 						BodiesToDestroy.Enqueue(indexB);
 					}
 
@@ -230,9 +233,9 @@ namespace Gravitas2D
 					bool disintegrateA = false;
 					bool disintegrateB = false;
 
-					if (bodyA.VehicleModel.Radius >= FractureRadiusThreshold)
+					if (modelA.Radius >= FractureRadiusThreshold)
 					{
-						double bindingEnergyThresholdA = (GravitationalConstant * 3.0 * massA * massA) / (5.0 * math.max(1.0, bodyA.VehicleModel.Radius));
+						double bindingEnergyThresholdA = (GravitationalConstant * 3.0 * massA * massA) / (5.0 * math.max(1.0, modelA.Radius));
 						double specificBindingThresholdA = bindingEnergyThresholdA / math.max(1.0, massA);
 						disintegrateA = specificEnergyA >= specificBindingThresholdA || deltaVA > breakSpeedA;
 					}
@@ -241,9 +244,9 @@ namespace Gravitas2D
 						disintegrateA = deltaVA > breakSpeedA || payloadB > 0.0;
 					}
 
-					if (bodyB.VehicleModel.Radius >= FractureRadiusThreshold)
+					if (modelB.Radius >= FractureRadiusThreshold)
 					{
-						double bindingEnergyThresholdB = (GravitationalConstant * 3.0 * massB * massB) / (5.0 * math.max(1.0, bodyB.VehicleModel.Radius));
+						double bindingEnergyThresholdB = (GravitationalConstant * 3.0 * massB * massB) / (5.0 * math.max(1.0, modelB.Radius));
 						double specificBindingThresholdB = bindingEnergyThresholdB / math.max(1.0, massB);
 						disintegrateB = specificEnergyB >= specificBindingThresholdB || deltaVB > breakSpeedB;
 					}
@@ -254,13 +257,13 @@ namespace Gravitas2D
 
 					if (disintegrateA)
 					{
-						if (bodyA.VehicleModel.Radius >= FractureRadiusThreshold && deltaVA < breakSpeedA * 10) BodiesToFracture.Enqueue(indexA);
+						if (modelA.Radius >= FractureRadiusThreshold && deltaVA < breakSpeedA * 10) BodiesToFracture.Enqueue(indexA);
 						else BodiesToDestroy.Enqueue(indexA);
 					}
 
 					if (disintegrateB)
 					{
-						if (bodyB.VehicleModel.Radius >= FractureRadiusThreshold && deltaVB < breakSpeedB * 10) BodiesToFracture.Enqueue(indexB);
+						if (modelB.Radius >= FractureRadiusThreshold && deltaVB < breakSpeedB * 10) BodiesToFracture.Enqueue(indexB);
 						else BodiesToDestroy.Enqueue(indexB);
 					}
 
@@ -268,22 +271,22 @@ namespace Gravitas2D
 					float remainingTime = TimeStep - toi;
 					double remainingTimeD = (double)remainingTime;
 
-					double2 posImpactA = bodyA.StateVector.Position + (vA * toi);
-					double2 posImpactB = bodyB.StateVector.Position + (vB * toi);
+					double2 posImpactA = stateVectorA.Position + (vA * toi);
+					double2 posImpactB = stateVectorB.Position + (vB * toi);
 
 					double2 finalPosA = posImpactA + (newVelA * remainingTimeD);
 					double2 finalPosB = posImpactB + (newVelB * remainingTimeD);
 
-					StateVector nextStateA = NextBodies[indexA].StateVector;
-					StateVector nextStateB = NextBodies[indexB].StateVector;
+					StateVector nextStateA = NextStateVectors[indexA];
+					StateVector nextStateB = NextStateVectors[indexB];
 
 					nextStateA.Velocity = newVelA;
 					nextStateA.Position = finalPosA;
 					nextStateB.Velocity = newVelB;
 					nextStateB.Position = finalPosB;
 
-					NextBodies[indexA] = new PhysicsBodyData(nextStateA, bodyA.VehicleModel, float2.zero, 0f);
-					NextBodies[indexB] = new PhysicsBodyData(nextStateB, bodyB.VehicleModel, float2.zero, 0f);
+					NextStateVectors[indexA] = nextStateA;
+					NextStateVectors[indexB] = nextStateB;
 
 					resolvedBodies[indexA] = true;
 					resolvedBodies[indexB] = true;

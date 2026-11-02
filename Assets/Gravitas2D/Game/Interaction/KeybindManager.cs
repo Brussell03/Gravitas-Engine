@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	[Serializable]
 	public struct Keybind

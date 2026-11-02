@@ -1,8 +1,9 @@
 using Gravitas2D;
+using GravitasDemo.Rendering;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	public class SimulationNavigationController : MonoBehaviour
 	{

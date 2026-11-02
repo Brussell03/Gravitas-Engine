@@ -1,9 +1,10 @@
 using CustomUI;
+using GravitasDemo.Rendering;
 using TMPro;
 using Unity.Mathematics;
 using UnityEngine;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	public class SelectedUIManager : MonoBehaviour
 	{

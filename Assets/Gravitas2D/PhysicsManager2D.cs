@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
@@ -41,9 +42,12 @@ namespace Gravitas2D
 		private Bounds2D _simulationBounds;
 		private List<PhysicsBody> _physicsBodies = new List<PhysicsBody>();
 		private Dictionary<string, PhysicsBody> _physicsBodyLookup = new Dictionary<string, PhysicsBody>();
-		private NativeList<PhysicsBodyData> _physicsBodiesData;
-		private NativeList<float> _breakSpeeds;
-		private NativeList<double> _warheadPayloadEnergies;
+		private NativeList<StateVector> _bodyStateVectors;
+		private NativeList<VehicleModel> _bodyVehicleModels;
+		private NativeList<double2> _bodyForces;
+		private NativeList<double> _bodyMoments;
+		private NativeList<float> _bodyBreakSpeeds;
+		private NativeList<double> _bodyWarheadPayloadEnergies;
 		private NativeList<bool> _isCelestialMap;
 		private NativeList<bool> _isCollisionTriggerMap;
 		private NativeList<bool> _isCollidableMap;
@@ -67,7 +71,7 @@ namespace Gravitas2D
 		private NativeQueue<CollisionEvent> _collisionQueue;
 		private NativeQueue<int> _bodiesToDestroyQueue;
 		private NativeQueue<int> _bodiesToFractureQueue;
-		private NativeArray<PhysicsBodyData> _nextPhysicsBodiesData;
+		private NativeArray<StateVector> _nextBodyStateVectors;
 
 		public bool IsInitialized => _isInitialized;
 		public bool IsPaused => _isPaused;
@@ -148,9 +152,12 @@ namespace Gravitas2D
 			// Initialize collections
 			_physicsBodies.Clear();
 			_physicsBodyLookup.Clear();
-			_physicsBodiesData = new NativeList<PhysicsBodyData>(Allocator.Persistent);
-			_breakSpeeds = new NativeList<float>(Allocator.Persistent);
-			_warheadPayloadEnergies = new NativeList<double>(Allocator.Persistent);
+			_bodyStateVectors = new NativeList<StateVector>(Allocator.Persistent);
+			_bodyVehicleModels = new NativeList<VehicleModel>(Allocator.Persistent);
+			_bodyForces = new NativeList<double2>(Allocator.Persistent);
+			_bodyMoments = new NativeList<double>(Allocator.Persistent);
+			_bodyBreakSpeeds = new NativeList<float>(Allocator.Persistent);
+			_bodyWarheadPayloadEnergies = new NativeList<double>(Allocator.Persistent);
 			_isCelestialMap = new NativeList<bool>(Allocator.Persistent);
 			_isCollisionTriggerMap = new NativeList<bool>(Allocator.Persistent);
 			_isCollidableMap = new NativeList<bool>(Allocator.Persistent);
@@ -216,14 +223,14 @@ namespace Gravitas2D
 			_stepCount++;
 
 			// Resize physics data array if changed
-			if (!_nextPhysicsBodiesData.IsCreated || _nextPhysicsBodiesData.Length != _physicsBodiesData.Length)
+			if (!_nextBodyStateVectors.IsCreated || _nextBodyStateVectors.Length != _bodyStateVectors.Length)
 			{
-				if (_nextPhysicsBodiesData.IsCreated) _nextPhysicsBodiesData.Dispose();
-				_nextPhysicsBodiesData = new NativeArray<PhysicsBodyData>(_physicsBodiesData.Length, Allocator.Persistent);
+				if (_nextBodyStateVectors.IsCreated) _nextBodyStateVectors.Dispose();
+				_nextBodyStateVectors = new NativeArray<StateVector>(_bodyStateVectors.Length, Allocator.Persistent);
 			}
 
 			// 1. Update states of gravitational sources
-			GravitySources.ScheduleStateUpdateJob(_physicsBodiesData.AsArray(), out JobHandle dependency);
+			GravitySources.ScheduleStateUpdateJob(_bodyStateVectors.AsArray(), _bodyVehicleModels.AsArray(), out JobHandle dependency);
 
 			_spatialHashMap.Clear();
 			_collisionQueue.Clear();
@@ -232,19 +239,19 @@ namespace Gravitas2D
 
 			// Ensure Spatial Hash Map Capacity
 			// NativeParallelMultiHashMap parallel writers throw exceptions if capacity is exceeded during a job.
-			if (_physicsBodiesData.Length > _spatialHashMap.Capacity)
+			if (_bodyStateVectors.Length > _spatialHashMap.Capacity)
 			{
-				_spatialHashMap.Capacity = math.max(_spatialHashMap.Capacity * 2, _physicsBodiesData.Length + 256);
+				_spatialHashMap.Capacity = math.max(_spatialHashMap.Capacity * 2, _bodyStateVectors.Length + 256);
 			}
 
 			// 2. Build spatial hash
 			var hashJob = new SpatialHash.HashBodiesJob
 			{
-				Bodies = _physicsBodiesData.AsArray(),
+				BodyStateVectors = _bodyStateVectors.AsArray(),
 				CellSize = _spatialCellSize,
 				SpatialMapWriter = _spatialHashMap.AsParallelWriter()
 			};
-			_propagateBodiesJobHandle = hashJob.Schedule(_physicsBodiesData.Length, 64, dependency); // Hash executes parallel across ranks
+			_propagateBodiesJobHandle = hashJob.Schedule(_bodyStateVectors.Length, 64, dependency); // Hash executes parallel across ranks
 
 			// 3. Schedule propagation and collision detection jobs
 			if (_integrationMethod == Integrator.VelocityVerlet)
@@ -259,11 +266,14 @@ namespace Gravitas2D
 					SpatialMap = _spatialHashMap,
 					CollisionTriggerMap = _isCollisionTriggerMap.AsArray(),
 					CollidableMap = _isCollidableMap.AsArray(),
-					CurrentBodies = _physicsBodiesData.AsArray(),
-					NextBodies = _nextPhysicsBodiesData,
+					BodyStateVectors = _bodyStateVectors.AsArray(),
+					BodyVehicleModels = _bodyVehicleModels.AsArray(),
+					BodyForces = _bodyForces.AsArray(),
+					BodyMoments = _bodyMoments.AsArray(),
+					NextStateVectors = _nextBodyStateVectors,
 					CollisionQueue = _collisionQueue.AsParallelWriter()
 				};
-				_propagateBodiesJobHandle = propagatePhysicsJob.Schedule(_physicsBodiesData.Length, 32, _propagateBodiesJobHandle);
+				_propagateBodiesJobHandle = propagatePhysicsJob.Schedule(_bodyStateVectors.Length, 32, _propagateBodiesJobHandle);
 			}
 			else
 			{
@@ -277,22 +287,26 @@ namespace Gravitas2D
 					SpatialMap = _spatialHashMap,
 					CollisionTriggerMap = _isCollisionTriggerMap.AsArray(),
 					CollidableMap = _isCollidableMap.AsArray(),
-					CurrentBodies = _physicsBodiesData.AsArray(),
-					NextBodies = _nextPhysicsBodiesData,
+					BodyStateVectors = _bodyStateVectors.AsArray(),
+					BodyVehicleModels = _bodyVehicleModels.AsArray(),
+					BodyForces = _bodyForces.AsArray(),
+					BodyMoments = _bodyMoments.AsArray(),
+					NextStateVectors = _nextBodyStateVectors,
 					CollisionQueue = _collisionQueue.AsParallelWriter()
 				};
-				_propagateBodiesJobHandle = propagatePhysicsJob.Schedule(_physicsBodiesData.Length, 32, _propagateBodiesJobHandle);
+				_propagateBodiesJobHandle = propagatePhysicsJob.Schedule(_bodyStateVectors.Length, 32, _propagateBodiesJobHandle);
 			}
 
 			// 4. Resolve collisions (Single-threaded to prevent conflicting multi-body resolution)
 			var resolveCollisionsJob = new CollisionResolution.ResolveCollisionsJob
 			{
 				TimeStep = ScaledPhysicsTimeStep,
-				BreakSpeeds = _breakSpeeds.AsArray(),
-				WarheadPayloadEnergies = _warheadPayloadEnergies.AsArray(),
+				BreakSpeeds = _bodyBreakSpeeds.AsArray(),
+				WarheadPayloadEnergies = _bodyWarheadPayloadEnergies.AsArray(),
 				FractureRadiusThreshold = _fractureRadiusThreshold,
-				CurrentBodies = _physicsBodiesData.AsArray(),
-				NextBodies = _nextPhysicsBodiesData,
+				BodyStateVectors = _bodyStateVectors.AsArray(),
+				BodyVehicleModels = _bodyVehicleModels.AsArray(),
+				NextStateVectors = _nextBodyStateVectors,
 				CollisionQueue = _collisionQueue,
 				BodiesToDestroy = _bodiesToDestroyQueue,
 				BodiesToFracture = _bodiesToFractureQueue
@@ -302,10 +316,10 @@ namespace Gravitas2D
 			// 5. Swap data collections
 			var finalCopyJob = new CopyStatesJob
 			{
-				Source = _nextPhysicsBodiesData,
-				Destination = _physicsBodiesData.AsArray()
+				Source = _nextBodyStateVectors,
+				Destination = _bodyStateVectors.AsArray()
 			};
-			_propagateBodiesJobHandle = finalCopyJob.Schedule(_physicsBodiesData.Length, 64, _propagateBodiesJobHandle);
+			_propagateBodiesJobHandle = finalCopyJob.Schedule(_bodyStateVectors.Length, 64, _propagateBodiesJobHandle);
 			
 			JobHandle.ScheduleBatchedJobs();
 		}
@@ -329,8 +343,11 @@ namespace Gravitas2D
 					PhysicsBody body = _physicsBodies[i];
 
 					// Synchronize state and recalculate SoI.
-					body.SyncStateFromManager(_physicsBodiesData[i]);
+					body.SyncStateFromManager(_bodyStateVectors[i]);
 				}
+
+				ZeroOutList(ref _bodyForces);
+				ZeroOutList(ref _bodyMoments);
 
 				OnPhysicsUpdated?.Invoke();
 
@@ -383,7 +400,10 @@ namespace Gravitas2D
 						if (integrationTime > 0)
 						{
 							Integrators.VelocityVerlet(
-								PhysicsBodyData.Stripped(updatedState, db.Model),
+								updatedState,
+								db.Model,
+								double2.zero,
+								0,
 								GravitySources.GravitationalBodies,
 								GravitySources.GravitationalBodyIndices,
 								_simulationElapsedTime,
@@ -456,17 +476,17 @@ namespace Gravitas2D
 				_isBoundsCheckRunning = true;
 
 				// Allocate with maximum possible capacity since the parallel writer uses AddNoResize
-				_outOfBoundsIndices = new NativeList<int>(_physicsBodiesData.Length, Allocator.Persistent);
+				_outOfBoundsIndices = new NativeList<int>(_bodyStateVectors.Length, Allocator.Persistent);
 
 				var boundsJob = new CheckWithinBounds
 				{
-					Bodies = _physicsBodiesData.AsArray(),
+					BodyStateVectors = _bodyStateVectors.AsArray(),
 					OutOfBoundsIndices = _outOfBoundsIndices.AsParallelWriter(),
 					SimulationBounds = _simulationBounds
 				};
 
 				// Schedule as an independent background job (using batch size of 64)
-				_boundsCheckHandle = boundsJob.Schedule(_physicsBodiesData.Length, 64);
+				_boundsCheckHandle = boundsJob.Schedule(_bodyStateVectors.Length, 64);
 
 				// Yield execution completely out of the main thread until the job finishes
 				yield return new WaitUntil(() => _boundsCheckHandle.IsCompleted);
@@ -509,9 +529,12 @@ namespace Gravitas2D
 					// Remove from managed and parallel native lists securely
 					_physicsBodies.RemoveAt(index);
 					_physicsBodyLookup.Remove(target.Name);
-					_physicsBodiesData.RemoveAt(index);
-					_breakSpeeds.RemoveAt(index);
-					_warheadPayloadEnergies.RemoveAt(index);
+					_bodyStateVectors.RemoveAt(index);
+					_bodyVehicleModels.RemoveAt(index);
+					_bodyForces.RemoveAt(index);
+					_bodyMoments.RemoveAt(index);
+					_bodyBreakSpeeds.RemoveAt(index);
+					_bodyWarheadPayloadEnergies.RemoveAt(index);
 					_isCelestialMap.RemoveAt(index);
 					_isCollisionTriggerMap.RemoveAt(index);
 					_isCollidableMap.RemoveAt(index);
@@ -543,17 +566,21 @@ namespace Gravitas2D
 					PendingAddition add = _bodiesToAdd.Dequeue();
 					int index = _physicsBodies.Count;
 
-					_physicsBodiesData.Add(new PhysicsBodyData(add.State, add.Model, float2.zero, 0f));
-					_breakSpeeds.Add(_compositionProfiles[add.CompositionIndex].BreakSpeedThreshold);
-					_warheadPayloadEnergies.Add(add.WarheadEnergy);
+					_bodyStateVectors.Add(add.State);
+					_bodyVehicleModels.Add(add.Model);
+					_bodyForces.Add(double2.zero);
+					_bodyMoments.Add(0);
+					_bodyBreakSpeeds.Add(_compositionProfiles[add.CompositionIndex].BreakSpeedThreshold);
+					_bodyWarheadPayloadEnergies.Add(add.WarheadEnergy);
 					_isCelestialMap.Add(add.IsCelestial);
 					_isCollisionTriggerMap.Add(add.IsCollisionTrigger);
 					_isCollidableMap.Add(add.IsCollidable);
 
 					// Transition from pending shell to active simulation body
 					add.Body.SetIndex(index);
+
 					// Forces a sync which will automatically execute any mutations queued in _pendingOperations during the delay
-					add.Body.SyncStateFromManager(_physicsBodiesData[index]);
+					add.Body.SyncStateFromManager(add.State);
 					
 					_physicsBodies.Add(add.Body);
 					_physicsBodyLookup.Add(add.Body.Name, add.Body);
@@ -613,13 +640,16 @@ namespace Gravitas2D
 			_bodiesToRemove.Clear();
 			_collisionActivations.Clear();
 
-			if (_physicsBodiesData.IsCreated) _physicsBodiesData.Dispose();
-			if (_breakSpeeds.IsCreated) _breakSpeeds.Dispose();
-			if (_warheadPayloadEnergies.IsCreated) _warheadPayloadEnergies.Dispose();
+			if (_bodyStateVectors.IsCreated) _bodyStateVectors.Dispose();
+			if (_bodyVehicleModels.IsCreated) _bodyVehicleModels.Dispose();
+			if (_bodyForces.IsCreated) _bodyForces.Dispose();
+			if (_bodyMoments.IsCreated) _bodyMoments.Dispose();
+			if (_bodyBreakSpeeds.IsCreated) _bodyBreakSpeeds.Dispose();
+			if (_bodyWarheadPayloadEnergies.IsCreated) _bodyWarheadPayloadEnergies.Dispose();
 			if (_isCelestialMap.IsCreated) _isCelestialMap.Dispose();
 			if (_isCollisionTriggerMap.IsCreated) _isCollisionTriggerMap.Dispose();
 			if (_isCollidableMap.IsCreated) _isCollidableMap.Dispose();
-			if (_nextPhysicsBodiesData.IsCreated) _nextPhysicsBodiesData.Dispose();
+			if (_nextBodyStateVectors.IsCreated) _nextBodyStateVectors.Dispose();
 			if (_spatialHashMap.IsCreated) _spatialHashMap.Dispose();
 			if (_collisionQueue.IsCreated) _collisionQueue.Dispose();
 			if (_bodiesToDestroyQueue.IsCreated) _bodiesToDestroyQueue.Dispose();
@@ -642,9 +672,12 @@ namespace Gravitas2D
 			_delayedBodies.Clear();
 			_bodiesToRemove.Clear();
 			_collisionActivations.Clear();
-			if (_physicsBodiesData.IsCreated) _physicsBodiesData.Clear();
-			if (_breakSpeeds.IsCreated) _breakSpeeds.Clear();
-			if (_warheadPayloadEnergies.IsCreated) _warheadPayloadEnergies.Clear();
+			if (_bodyStateVectors.IsCreated) _bodyStateVectors.Clear();
+			if (_bodyVehicleModels.IsCreated) _bodyVehicleModels.Clear();
+			if (_bodyForces.IsCreated) _bodyForces.Clear();
+			if (_bodyMoments.IsCreated) _bodyMoments.Clear();
+			if (_bodyBreakSpeeds.IsCreated) _bodyBreakSpeeds.Clear();
+			if (_bodyWarheadPayloadEnergies.IsCreated) _bodyWarheadPayloadEnergies.Clear();
 			if (_isCelestialMap.IsCreated) _isCelestialMap.Clear();
 			if (_isCollisionTriggerMap.IsCreated) _isCollisionTriggerMap.Clear();
 			if (_isCollidableMap.IsCreated) _isCollidableMap.Clear();
@@ -766,31 +799,141 @@ namespace Gravitas2D
 				_bodiesToRemove.Add(targetBody);
 			}
 		}
-
+		
 		/// <summary>
-		/// Returns the PhysicsBodyData struct for a physics body index, IF propagation is not active.
+		/// Returns the state vector for a physics body index, IF propagation is not active.
 		/// </summary>
-		public bool TryGetBodyData(int bodyIndex, out PhysicsBodyData bodyData)
+		public bool TryGetStateVector(int bodyIndex, out StateVector stateVector)
 		{
 			if (_physicsJobScheduled)
 			{
-				bodyData = default;
+				stateVector = default;
 				return false;
 			}
 
-			if (_physicsBodiesData.IsCreated && bodyIndex >= 0 && bodyIndex < _physicsBodiesData.Length)
+			if (_bodyStateVectors.IsCreated && bodyIndex >= 0 && bodyIndex < _bodyStateVectors.Length)
 			{
-				bodyData = _physicsBodiesData[bodyIndex];
+				stateVector = _bodyStateVectors[bodyIndex];
 				return true;
 			}
 
-			bodyData = default;
+			stateVector = default;
 			return false;
 		}
 
-		public void UpdateBodyData(int index, in PhysicsBodyData newBodyData)
+		/// <summary>
+		/// Returns the vehicle model for a physics body index, IF propagation is not active.
+		/// </summary>
+		public bool TryGetVehicleModel(int bodyIndex, out VehicleModel model)
 		{
-			_physicsBodiesData[index] = newBodyData;
+			if (_physicsJobScheduled)
+			{
+				model = default;
+				return false;
+			}
+
+			if (_bodyVehicleModels.IsCreated && bodyIndex >= 0 && bodyIndex < _bodyVehicleModels.Length)
+			{
+				model = _bodyVehicleModels[bodyIndex];
+				return true;
+			}
+
+			model = default;
+			return false;
+		}
+
+		/// <summary>
+		/// Returns the force for a physics body index, IF propagation is not active.
+		/// </summary>
+		public bool TryGetBodyForce(int bodyIndex, out double2 force)
+		{
+			if (_physicsJobScheduled)
+			{
+				force = default;
+				return false;
+			}
+
+			if (_bodyForces.IsCreated && bodyIndex >= 0 && bodyIndex < _bodyForces.Length)
+			{
+				force = _bodyForces[bodyIndex];
+				return true;
+			}
+
+			force = default;
+			return false;
+		}
+
+		/// <summary>
+		/// Returns the moment for a physics body index, IF propagation is not active.
+		/// </summary>
+		public bool TryGetBodyMoment(int bodyIndex, out double moment)
+		{
+			if (_physicsJobScheduled)
+			{
+				moment = default;
+				return false;
+			}
+
+			if (_bodyMoments.IsCreated && bodyIndex >= 0 && bodyIndex < _bodyMoments.Length)
+			{
+				moment = _bodyMoments[bodyIndex];
+				return true;
+			}
+
+			moment = default;
+			return false;
+		}
+
+		public void SetBodyStateVector(int index, StateVector newStateVector)
+		{
+			if (!_bodyStateVectors.IsCreated || index >= _bodyStateVectors.Length || index < 0) return;
+
+			if (_physicsJobScheduled)
+			{
+				Debug.LogError($"{GetType().Name} Cannot update body state vector while physics job is running.");
+				return;
+			}
+
+			_bodyStateVectors[index] = newStateVector;
+		}
+
+		public void SetBodyVehicleModel(int index, VehicleModel newModel)
+		{
+			if (!_bodyVehicleModels.IsCreated || index >= _bodyVehicleModels.Length || index < 0) return;
+
+			if (_physicsJobScheduled)
+			{
+				Debug.LogError($"[{GetType().Name}] Cannot update body vehicle model while physics job is running.");
+				return;
+			}
+
+			_bodyVehicleModels[index] = newModel;
+		}
+
+		public void SetBodyForce(int index, double2 force)
+		{
+			if (!_bodyForces.IsCreated || index >= _bodyForces.Length || index < 0) return;
+
+			if (_physicsJobScheduled)
+			{
+				Debug.LogError($"{GetType().Name} Cannot update body force while physics job is running.");
+				return;
+			}
+
+			_bodyForces[index] = force;
+		}
+
+		public void SetBodyMoment(int index, double moment)
+		{
+			if (!_bodyMoments.IsCreated || index >= _bodyMoments.Length || index < 0) return;
+
+			if (_physicsJobScheduled)
+			{
+				Debug.LogError($"{GetType().Name} Cannot update body moment while physics job is running.");
+				return;
+			}
+
+			_bodyMoments[index] = moment;
 		}
 
 		public void FractureBody(int bodyIndex)
@@ -806,8 +949,9 @@ namespace Gravitas2D
 				return;
 			}
 
-			PhysicsBodyData originalBodyData = _physicsBodiesData[bodyIndex];
-			double bodyRadius = originalBodyData.VehicleModel.Radius;
+			StateVector originalStateVector = _bodyStateVectors[bodyIndex];
+			VehicleModel originalModel = _bodyVehicleModels[bodyIndex];
+			double bodyRadius = originalModel.Radius;
 
 			FractureProfile profile = null;
 
@@ -831,8 +975,8 @@ namespace Gravitas2D
 			Debug.Log($"[{GetType().Name}] Fracturing {_physicsBodies[bodyIndex].Name} with profile: {profile.ProfileName}");
 
 			List<ChunkData> fractureData = BodyFractureUtility.CalculateFracture(
-				originalBodyData.StateVector.Position, originalBodyData.StateVector.Velocity, originalBodyData.StateVector.AngularVelocity,
-				originalBodyData.VehicleModel.Radius, originalBodyData.VehicleModel.Mass, profile, 0);
+				originalStateVector.Position, originalStateVector.Velocity, originalStateVector.AngularVelocity,
+				originalModel.Radius, originalModel.Mass, profile, 0);
 			
 			int originalCompositionIndex = _physicsBodies[bodyIndex].CompositionIndex;
 
@@ -876,7 +1020,7 @@ namespace Gravitas2D
 		/// Safely executes a query delegate against the spatial hash map, waiting for active jobs to complete if necessary 
 		/// to ensure data safety when queried outside the namespace or during physics execution.
 		/// </summary>
-		public void QuerySpatialHash(Action<NativeParallelMultiHashMap<int, int>, NativeArray<PhysicsBodyData>, double> queryAction)
+		public void QuerySpatialHash(Action<NativeParallelMultiHashMap<int, int>, NativeArray<StateVector>, double> queryAction)
 		{
 			if (_physicsJobScheduled)
 			{
@@ -884,20 +1028,32 @@ namespace Gravitas2D
 				_physicsJobScheduled = false;
 			}
 
-			if (_spatialHashMap.IsCreated && _physicsBodiesData.IsCreated)
+			if (_spatialHashMap.IsCreated && _bodyStateVectors.IsCreated)
 			{
-				queryAction(_spatialHashMap, _physicsBodiesData.AsArray(), _spatialCellSize);
+				queryAction(_spatialHashMap, _bodyStateVectors.AsArray(), _spatialCellSize);
 			}
 		}
 
 		#endregion
+
+		[BurstCompile]
+		public unsafe static void ZeroOutList<T>(ref NativeList<T> list) where T : unmanaged
+		{
+			if (list.Length == 0) return;
+			
+			// Get the raw buffer pointer and clear the memory block
+			void* ptr = list.GetUnsafePtr();
+			long sizeInBytes = (long)list.Length * UnsafeUtility.SizeOf<T>();
+			
+			UnsafeUtility.MemClear(ptr, sizeInBytes);
+		}
 	}
 
 	[BurstCompile]
 	public struct CopyStatesJob : IJobParallelFor
 	{
-		[ReadOnly] public NativeArray<PhysicsBodyData> Source;
-		public NativeArray<PhysicsBodyData> Destination;
+		[ReadOnly] public NativeArray<StateVector> Source;
+		public NativeArray<StateVector> Destination;
 
 		public void Execute(int index)
 		{
@@ -908,13 +1064,13 @@ namespace Gravitas2D
 	[BurstCompile]
 	public struct CheckWithinBounds : IJobParallelFor
 	{
-		[ReadOnly] public NativeArray<PhysicsBodyData> Bodies;
+		[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
 		[WriteOnly] public NativeList<int>.ParallelWriter OutOfBoundsIndices;
 		public Bounds2D SimulationBounds;
 
 		public void Execute(int index)
 		{
-			if (!SimulationBounds.IsWithinBounds(Bodies[index].StateVector.Position))
+			if (!SimulationBounds.IsWithinBounds(BodyStateVectors[index].Position))
 			{
 				OutOfBoundsIndices.AddNoResize(index);
 			}

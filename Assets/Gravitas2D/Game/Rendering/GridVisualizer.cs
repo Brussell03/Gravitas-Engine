@@ -4,7 +4,7 @@ using UnityEngine;
 using Gravitas2D;
 using TMPro;
 
-namespace GravitasDemo
+namespace GravitasDemo.Rendering
 {
 	[DefaultExecutionOrder(100)]
 	public class GridVisualizer : MonoBehaviour

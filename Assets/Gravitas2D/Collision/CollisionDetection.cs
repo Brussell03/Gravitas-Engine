@@ -18,19 +18,19 @@ namespace Gravitas2D
 	public static class CollisionDetection
 	{
 		[BurstCompile]
-		public static void EvaluateCollisions(int index, in PhysicsBodyData currentBody, in StateVector nextState, in NativeArray<bool> collisionTriggerMap, in NativeArray<bool> collidableMap, float timeStep, double cellSize, in NativeArray<PhysicsBodyData> currentBodies, in NativeParallelMultiHashMap<int, int> spatialMap, ref NativeQueue<CollisionEvent>.ParallelWriter collisionQueue)
+		public static void EvaluateCollisions(int index, in StateVector stateVector, in VehicleModel vehicleModel, in StateVector nextState, in NativeArray<bool> collisionTriggerMap, in NativeArray<bool> collidableMap, float timeStep, double cellSize, in NativeArray<StateVector> bodyStateVectors, in NativeArray<VehicleModel> bodyVehicleModels, in NativeParallelMultiHashMap<int, int> spatialMap, ref NativeQueue<CollisionEvent>.ParallelWriter collisionQueue)
 		{
 			// Optimization: Only collidable objects initiate spatial grid queries.
 			// This prevents non-collidable fragments from doing AABB math.
 			if (!collisionTriggerMap[index] || !collidableMap[index]) return;
 
-			double radius = currentBody.VehicleModel.Radius;
+			double radius = vehicleModel.Radius;
 
 			// Calculate swept AABB
-			double minX = math.min(currentBody.StateVector.Position.x, nextState.Position.x) - radius;
-			double maxX = math.max(currentBody.StateVector.Position.x, nextState.Position.x) + radius;
-			double minY = math.min(currentBody.StateVector.Position.y, nextState.Position.y) - radius;
-			double maxY = math.max(currentBody.StateVector.Position.y, nextState.Position.y) + radius;
+			double minX = math.min(stateVector.Position.x, nextState.Position.x) - radius;
+			double maxX = math.max(stateVector.Position.x, nextState.Position.x) + radius;
+			double minY = math.min(stateVector.Position.y, nextState.Position.y) - radius;
+			double maxY = math.max(stateVector.Position.y, nextState.Position.y) + radius;
 
 			int minCellX = (int)math.floor(minX / cellSize);
 			int maxCellX = (int)math.floor(maxX / cellSize);
@@ -56,16 +56,16 @@ namespace Gravitas2D
 							// Deduplication: Only apply index comparison if BOTH objects are collidable.
 							if (otherIndex < index) continue;
 
-							PhysicsBodyData otherBody = currentBodies[otherIndex];
+							StateVector otherStateVector = bodyStateVectors[otherIndex];
 
 							if (SweptCircleIntersection(
-								currentBody.StateVector.Position, currentBody.StateVector.Velocity, radius,
-								otherBody.StateVector.Position, otherBody.StateVector.Velocity, otherBody.VehicleModel.Radius,
+								stateVector.Position, stateVector.Velocity, radius,
+								otherStateVector.Position, otherStateVector.Velocity, bodyVehicleModels[otherIndex].Radius,
 								timeStep, out float toi))
 							{
 								// Calculate exact contact parameters
-								double2 posA_AtImpact = currentBody.StateVector.Position + (currentBody.StateVector.Velocity * toi);
-								double2 posB_AtImpact = otherBody.StateVector.Position + (otherBody.StateVector.Velocity * toi);
+								double2 posA_AtImpact = stateVector.Position + (stateVector.Velocity * toi);
+								double2 posB_AtImpact = otherStateVector.Position + (otherStateVector.Velocity * toi);
 								
 								double2 relativePos = posB_AtImpact - posA_AtImpact;
 
@@ -75,7 +75,7 @@ namespace Gravitas2D
 									: new double2(1, 0);
 								
 								double2 contactPoint = posA_AtImpact + normal * radius;
-								double2 relativeVelocity = otherBody.StateVector.Velocity - currentBody.StateVector.Velocity;
+								double2 relativeVelocity = otherStateVector.Velocity - stateVector.Velocity;
 
 								collisionQueue.Enqueue(new CollisionEvent
 								{

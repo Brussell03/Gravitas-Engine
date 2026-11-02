@@ -7,8 +7,9 @@ using System.Linq;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.EventSystems;
+using GravitasDemo.Rendering;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	[RequireComponent(typeof(SimulationRenderer))]
 	public class SimulationInteractionController : MonoBehaviour

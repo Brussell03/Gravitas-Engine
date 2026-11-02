@@ -1,7 +1,8 @@
+using GravitasDemo.Rendering;
 using TMPro;
 using UnityEngine;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	public class QuickSelection : MonoBehaviour
 	{

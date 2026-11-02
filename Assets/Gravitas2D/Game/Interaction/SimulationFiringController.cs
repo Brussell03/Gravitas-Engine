@@ -4,8 +4,9 @@ using UnityEngine;
 using System.Collections.Generic;
 using UnityEngine.UI;
 using TMPro;
+using GravitasDemo.Rendering;
 
-namespace GravitasDemo
+namespace GravitasDemo.Interaction
 {
 	public class SimulationFiringController : MonoBehaviour
 	{

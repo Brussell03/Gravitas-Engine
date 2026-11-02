@@ -37,14 +37,14 @@ namespace Gravitas2D
 		[BurstCompile]
 		public struct HashBodiesJob : IJobParallelFor
 		{
-			[ReadOnly] public NativeArray<PhysicsBodyData> Bodies;
+			[ReadOnly] public NativeArray<StateVector> BodyStateVectors;
 			[ReadOnly] public double CellSize;
 			
 			[WriteOnly] public NativeParallelMultiHashMap<int, int>.ParallelWriter SpatialMapWriter;
 
 			public void Execute(int index)
 			{
-				int hash = GetCellHash(Bodies[index].StateVector.Position, CellSize);
+				int hash = GetCellHash(BodyStateVectors[index].Position, CellSize);
 				SpatialMapWriter.Add(hash, index);
 			}
 		}

@@ -5,27 +5,6 @@ using UnityEngine;
 
 namespace Gravitas2D
 {
-	public struct PhysicsBodyData
-	{
-		public StateVector StateVector;
-		public VehicleModel VehicleModel;
-		public double2 ExternalForce;
-		public double ExternalMoment;
-
-		public PhysicsBodyData(in StateVector stateVector, VehicleModel vehicleModel, double2 externalForce, double externalMoment)
-		{
-			StateVector = stateVector;
-			VehicleModel = vehicleModel;
-			ExternalForce = externalForce;
-			ExternalMoment = externalMoment;
-		}
-
-		public static PhysicsBodyData Stripped(StateVector stateVector, VehicleModel vehicleModel)
-		{
-			return new PhysicsBodyData(stateVector, vehicleModel, double2.zero, 0);
-		}
-	}
-
 	public class PhysicsBody
 	{
 		private string _name;
@@ -160,19 +139,39 @@ namespace Gravitas2D
 			return false;
 		}
 
-		public void SyncStateFromManager(in PhysicsBodyData data)
+		public void SyncStateFromManager(in StateVector stateVector)
 		{
 			if (_isTracked)
 			{
-				OnTrackedPositionUpdated?.Invoke(data.StateVector.Position - _currentStateVector.Position);
+				OnTrackedPositionUpdated?.Invoke(stateVector.Position - _currentStateVector.Position);
 			}
 
-			_currentStateVector = data.StateVector;
-			_vehicleModel = data.VehicleModel;
+			_currentStateVector = stateVector;
+			// _vehicleModel = data.VehicleModel;
 
 			FlushPendingOperations();
 
 			UpdateSoI();
+		}
+
+		/// <summary>
+		/// Sets the mass of the physics body directly without overwriting external forces, moments, or velocity vectors.
+		/// </summary>
+		public void SetMass(double newMass)
+		{
+			if (newMass <= 0.0) throw new ArgumentOutOfRangeException(nameof(newMass), "Mass must be strictly greater than zero.");
+
+			ExecuteOrDefer(() =>
+			{
+				if (PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model))
+				{
+					// Recompute vehicle model properties with the new mass
+					VehicleModel updatedModel = new VehicleModel(newMass, model.Radius);
+					_vehicleModel = updatedModel;
+
+					PhysicsManager2D.Instance.SetBodyVehicleModel(_bodyIndex, updatedModel);
+				}
+			});
 		}
 
 		public void SetTracked(bool isTracked) => _isTracked = isTracked;
@@ -224,10 +223,10 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce))
 				{
-					double2 worldForce = data.VehicleModel.Mass * (double2)worldAcceleration;
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment));
+					double2 worldForce = Mass * (double2)worldAcceleration;
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
 				}
 			});
 		}
@@ -239,10 +238,12 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model) &&
+					PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce))
 				{
-					double2 worldForce = RotateVector(data.VehicleModel.Mass * (double2)relativeAcceleration, data.StateVector.Orientation); 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment));
+					double2 worldForce = RotateVector(model.Mass * (double2)relativeAcceleration, state.Orientation);
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
 				}
 			});
 		}
@@ -254,9 +255,9 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce))
 				{
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
 				}
 			});
 		}
@@ -269,12 +270,15 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce) &&
+					PhysicsManager2D.Instance.TryGetBodyMoment(_bodyIndex, out double currentMoment))
 				{
-					float2 r_world = (float2)(worldPosition - data.StateVector.Position);
+					float2 r_world = (float2)(worldPosition - state.Position);
 					float torque = Cross2D(r_world, worldForce);
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment + torque));
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
+					PhysicsManager2D.Instance.SetBodyMoment(_bodyIndex, currentMoment + torque);
 				}
 			});
 		}
@@ -286,10 +290,11 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce))
 				{
-					float2 worldForce = RotateVector(relativeForce, data.StateVector.Orientation);
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment));
+					double2 worldForce = RotateVector(relativeForce, state.Orientation);
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
 				}
 			});
 		}
@@ -302,12 +307,15 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetBodyForce(_bodyIndex, out double2 currentForce) &&
+					PhysicsManager2D.Instance.TryGetBodyMoment(_bodyIndex, out double currentMoment))
 				{
-					float2 worldForce = RotateVector(relativeForce, data.StateVector.Orientation);
+					double2 worldForce = RotateVector(relativeForce, state.Orientation);
 					float torque = Cross2D(relativePosition, relativeForce);
 					
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce + worldForce, data.ExternalMoment + torque));
+					PhysicsManager2D.Instance.SetBodyForce(_bodyIndex, currentForce + worldForce);
+					PhysicsManager2D.Instance.SetBodyMoment(_bodyIndex, currentMoment + torque);
 				}
 			});
 		}
@@ -320,19 +328,20 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model))
 				{
-					double2 velocityChange = (double2)worldImpulse * data.VehicleModel.InvMass;
+					double2 velocityChange = (double2)worldImpulse * model.InvMass;
 
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + velocityChange,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity
+						Position = state.Position,
+						Velocity = state.Velocity + velocityChange,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -345,23 +354,24 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model))
 				{
-					double2 velocityChange = (double2)worldImpulse * data.VehicleModel.InvMass;
-					double2 r_world = worldPosition - data.StateVector.Position;
+					double2 velocityChange = (double2)worldImpulse * model.InvMass;
+					double2 r_world = worldPosition - state.Position;
 					
 					float angularImpulse = Cross2D((float2)r_world, worldImpulse);
-					float angularVelChange = (float)((double)angularImpulse * data.VehicleModel.InvInertiaTensor);
+					float angularVelChange = (float)((double)angularImpulse * model.InvInertiaTensor);
 
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + velocityChange,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity + angularVelChange
+						Position = state.Position,
+						Velocity = state.Velocity + velocityChange,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity + angularVelChange
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -374,20 +384,21 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model))
 				{
-					double2 velocityChangeRelative = (double2)relativeImpulse * data.VehicleModel.InvMass;
-					double2 velocityChangeWorld = RotateVector(velocityChangeRelative, data.StateVector.Orientation);
+					double2 velocityChangeRelative = (double2)relativeImpulse * model.InvMass;
+					double2 velocityChangeWorld = RotateVector(velocityChangeRelative, state.Orientation);
 
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + velocityChangeWorld,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity
+						Position = state.Position,
+						Velocity = state.Velocity + velocityChangeWorld,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -400,23 +411,24 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state) &&
+					PhysicsManager2D.Instance.TryGetVehicleModel(_bodyIndex, out VehicleModel model))
 				{
-					double2 velocityChangeRelative = (double2)relativeImpulse * data.VehicleModel.InvMass;
-					double2 velocityChangeWorld = RotateVector(velocityChangeRelative, data.StateVector.Orientation);
+					double2 velocityChangeRelative = (double2)relativeImpulse * model.InvMass;
+					double2 velocityChangeWorld = RotateVector(velocityChangeRelative, state.Orientation);
 					
 					float angularImpulse = Cross2D(relativePosition, relativeImpulse);
-					float angularVelChange = (float)((double)angularImpulse * data.VehicleModel.InvInertiaTensor);
+					float angularVelChange = (float)((double)angularImpulse * model.InvInertiaTensor);
 
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + velocityChangeWorld,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity + angularVelChange
+						Position = state.Position,
+						Velocity = state.Velocity + velocityChangeWorld,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity + angularVelChange
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -429,17 +441,17 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state))
 				{
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + worldVelocity,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity
+						Position = state.Position,
+						Velocity = state.Velocity + worldVelocity,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -452,19 +464,19 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state))
 				{
-					double2 velocityChangeWorld = RotateVector(relativeVelocity, data.StateVector.Orientation);
+					double2 velocityChangeWorld = RotateVector(relativeVelocity, state.Orientation);
 
 					StateVector newState = new StateVector
 					{
-						Position = data.StateVector.Position,
-						Velocity = data.StateVector.Velocity + velocityChangeWorld,
-						Orientation = data.StateVector.Orientation,
-						AngularVelocity = data.StateVector.AngularVelocity
+						Position = state.Position,
+						Velocity = state.Velocity + velocityChangeWorld,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -476,9 +488,9 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetBodyMoment(_bodyIndex, out double currentMoment))
 				{
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(data.StateVector, data.VehicleModel, data.ExternalForce, data.ExternalMoment + worldTorque));
+					PhysicsManager2D.Instance.SetBodyMoment(_bodyIndex, currentMoment + worldTorque);
 				}
 			});
 		}
@@ -492,19 +504,17 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state))
 				{
-					var currentState = data.StateVector;
-
 					StateVector newState = new StateVector
 					{
 						Position = position,
-						Velocity = currentState.Velocity,
-						Orientation = currentState.Orientation,
-						AngularVelocity = currentState.AngularVelocity
+						Velocity = state.Velocity,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -516,19 +526,17 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state))
 				{
-					var currentState = data.StateVector;
-
 					StateVector newState = new StateVector
 					{
-						Position = currentState.Position + deltaPosition,
-						Velocity = currentState.Velocity,
-						Orientation = currentState.Orientation,
-						AngularVelocity = currentState.AngularVelocity
+						Position = state.Position + deltaPosition,
+						Velocity = state.Velocity,
+						Orientation = state.Orientation,
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}
@@ -540,19 +548,17 @@ namespace Gravitas2D
 		{
 			ExecuteOrDefer(() =>
 			{
-				if (PhysicsManager2D.Instance.TryGetBodyData(_bodyIndex, out PhysicsBodyData data))
+				if (PhysicsManager2D.Instance.TryGetStateVector(_bodyIndex, out StateVector state))
 				{
-					var currentState = data.StateVector;
-
 					StateVector newState = new StateVector
 					{
-						Position = currentState.Position,
-						Velocity = currentState.Velocity,
+						Position = state.Position,
+						Velocity = state.Velocity,
 						Orientation = orientation,
-						AngularVelocity = currentState.AngularVelocity
+						AngularVelocity = state.AngularVelocity
 					};
 
-					PhysicsManager2D.Instance.UpdateBodyData(_bodyIndex, new PhysicsBodyData(newState, data.VehicleModel, data.ExternalForce, data.ExternalMoment));
+					PhysicsManager2D.Instance.SetBodyStateVector(_bodyIndex, newState);
 				}
 			});
 		}

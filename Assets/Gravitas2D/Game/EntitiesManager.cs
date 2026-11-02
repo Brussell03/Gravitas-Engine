@@ -7,6 +7,8 @@ using Gravitas2D;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GravitasDemo.Rendering;
+using GravitasDemo.Interaction;
 
 namespace GravitasDemo
 {
@@ -30,10 +32,12 @@ namespace GravitasDemo
 		private readonly Dictionary<Entity, EntityMapObject> _activeVisuals = new Dictionary<Entity, EntityMapObject>();
 		private readonly List<Entity> _entitiesToRemove = new List<Entity>();
 
-		// Job System Variables
+		// Job System Variables & Time-Slicing
 		private JobHandle _filterJobHandle;
 		private bool _isJobRunning = false;
 		private int _scheduledEntityCount = 0;
+		private int _currentFrameSlice = 0;
+		private const int TimeSliceCount = 4; // Distributes sensor checks across 4 frames
 		
 		private NativeArray<double2> _jobPositions;
 		private NativeArray<double> _jobRadii;
@@ -147,6 +151,8 @@ namespace GravitasDemo
 
 		public void NotifyCapabilityAdded(Entity entity, IEntityCapability capability)
 		{
+			if (capability == null) return;
+
 			if (capability is NavigationCapability)
 			{
 				_navigableEntities.Add(entity);
@@ -159,7 +165,7 @@ namespace GravitasDemo
 
 		public EntityMapObject GetVisualForEntity(Entity entity)
 		{
-			return _activeVisuals.TryGetValue(entity, out var bodyVisual) ? bodyVisual : null;
+			return entity != null && _activeVisuals.TryGetValue(entity, out var bodyVisual) ? bodyVisual : null;
 		}
 
 		public void ClearEntities()
@@ -172,7 +178,16 @@ namespace GravitasDemo
 				_allEntities[i].RemoveManual();
 			}
 
-			DisposeNativeArrays();
+			_allEntities.Clear();
+			_knownEntities.Clear();
+			_observedEntities.Clear();
+			_visibleEntities.Clear();
+			_navigableEntities.Clear();
+			_sensorEntities.Clear();
+			_entityLookup.Clear();
+			_entityBodyLookup.Clear();
+
+			// DisposeNativeArrays();
 		}
 
 		private void DisposeNativeArrays()
@@ -310,24 +325,20 @@ namespace GravitasDemo
 			// Snapshot the count at schedule time
 			_scheduledEntityCount = entityCount;
 
-			// First pass: Count total active sensors on owned entities
+			// Increment time-slice index to distribute sensor checks across multiple frames
+			_currentFrameSlice = (_currentFrameSlice + 1) % TimeSliceCount;
+
+			// Count total active sensors
 			int totalSensors = 0;
-			for (int i = 0; i < entityCount; i++)
+			foreach (var entity in _sensorEntities)
 			{
-				var entity = _allEntities[i];
-				if (entity.IsOwned)
-				{
-					foreach (var _ in entity.GetCapabilities<SensorCapability>())
-					{
-						totalSensors++;
-					}
-				}
+				totalSensors += entity.NumSensors;
 			}
 
 			EnsureNativeArrayCapacities(entityCount, totalSensors);
 
 			int sensorIndex = 0;
-			for (int i = 0; i < entityCount; i++)
+			for (int i = 0; i < entityCount; i++) // Terrible
 			{
 				Entity entity = _allEntities[i];
 				_processingEntities[i] = entity;
@@ -369,6 +380,8 @@ namespace GravitasDemo
 				SensorTypes = _jobSensorTypes.GetSubArray(0, sensorIndex),
 				SensorSensitivities = _jobSensorSensitivities.GetSubArray(0, sensorIndex),
 				BufferedBounds = bufferedBounds,
+				CurrentFrameSlice = _currentFrameSlice,
+				TimeSliceCount = TimeSliceCount,
 				IsObserved = _jobIsObservedResults,
 				IsVisible = _jobIsVisibleResults
 			};
@@ -414,17 +427,34 @@ namespace GravitasDemo
 				// Safeguard against null entries or entities unregistered during the job cycle
 				if (entity == null || !_allEntities.Contains(entity)) continue;
 				
-				if (_jobIsObservedResults[i])
+				// if (_jobIsObservedResults[i])
+				// {
+				// 	if (_observedEntities.Add(entity))
+				// 	{
+				// 		entity.MarkObserved();
+				// 		_knownEntities.Add(entity);
+				// 	}
+				// }
+				// else
+				// {
+				// 	entity.MarkUnobserved();
+				// }
+				
+				// Only process observation updates for entities evaluated in the current time-slice
+				if (i % TimeSliceCount == _currentFrameSlice)
 				{
-					if (_observedEntities.Add(entity))
+					if (_jobIsObservedResults[i])
 					{
-						entity.MarkObserved();
-						_knownEntities.Add(entity);
+						if (_observedEntities.Add(entity))
+						{
+							entity.MarkObserved();
+							_knownEntities.Add(entity);
+						}
 					}
-				}
-				else
-				{
-					entity.MarkUnobserved();
+					else
+					{
+						entity.MarkUnobserved();
+					}
 				}
 
 				if (_jobIsVisibleResults[i] || protectedEntities.Contains(entity))
@@ -485,30 +515,38 @@ namespace GravitasDemo
 		[ReadOnly] public NativeArray<float> SensorSensitivities;
 
 		[ReadOnly] public Bounds2D BufferedBounds;
+		[ReadOnly] public int CurrentFrameSlice;
+		[ReadOnly] public int TimeSliceCount;
 		
-		[WriteOnly] public NativeArray<bool> IsObserved;
+		public NativeArray<bool> IsObserved;
 		[WriteOnly] public NativeArray<bool> IsVisible;
 
 		public void Execute(int index)
 		{
 			bool owned = IsOwned[index];
 			bool known = owned || IsKnown[index];
-			bool observed = false;
+			bool observed = IsObserved[index]; // Preserve previous state for non-evaluated time slices
 
 			double2 targetPos = Positions[index];
 			double targetRadius = Radii[index];
 			double targetMass = Masses[index];
 			
-			if (!owned)
+			// Time-slice sensor evaluation
+			if (!owned && (index % TimeSliceCount == CurrentFrameSlice))
 			{
+				observed = false;
+
 				for (int i = 0; i < SensorPositions.Length; i++)
 				{
 					double2 sensorPos = SensorPositions[i];
 					double range = SensorRanges[i];
-					double2 dir = targetPos - sensorPos;
-					double dist = math.length(dir);
+					double rangeSq = range * range;
 
-					if (dist > range || dist <= 1e-5) continue;
+					// Squared distance pre-filtering avoids expensive square root calculations
+					double2 dir = targetPos - sensorPos;
+					double distSq = math.lengthsq(dir);
+
+					if (distSq > rangeSq || distSq <= 1e-10) continue;
 
 					// Check Angle Swatch (Field of View)
 					float fov = SensorFOVs[i];
@@ -518,8 +556,10 @@ namespace GravitasDemo
 						float heading = SensorHeadings[i];
 						float deltaAngle = angleToTarget - heading;
 
-						while (deltaAngle > (float)math.PI) deltaAngle -= 2.0f * (float)math.PI;
-						while (deltaAngle < -(float)math.PI) deltaAngle += 2.0f * (float)math.PI;
+						// Fast angle wrapping without loops
+						deltaAngle = math.fmod(deltaAngle + (float)math.PI, 2.0f * (float)math.PI);
+						if (deltaAngle < 0f) deltaAngle += 2.0f * (float)math.PI;
+						deltaAngle -= (float)math.PI;
 
 						if (math.abs(deltaAngle) > (fov * 0.5f * math.PI / 180.0f))
 						{
@@ -528,6 +568,7 @@ namespace GravitasDemo
 					}
 
 					// Evaluate Distance Fall-off & Detection Strength by Sensor Type
+					double dist = math.sqrt(distSq);
 					int sensorType = SensorTypes[i];
 					float sensitivity = SensorSensitivities[i];
 					double detectionScore = 0.0;
@@ -535,14 +576,14 @@ namespace GravitasDemo
 					switch (sensorType)
 					{
 						case 0: // Optical: Proportional to apparent size (radius^2 / dist^2)
-							detectionScore = (targetRadius * targetRadius) / (dist * dist) * 1e4 * sensitivity;
+							detectionScore = (targetRadius * targetRadius) / (distSq) * 1e4 * sensitivity;
 							break;
 						case 1: // Infrared: Proportional to thermal signature (mass / dist^2)
-							detectionScore = (targetMass / 1000.0) / (dist * dist) * 1e8 * sensitivity;
+							detectionScore = (targetMass / 1000.0) / (distSq) * 1e8 * sensitivity;
 							break;
 						case 2: // Radar: Active reflection fall-off (radius^2 / dist^4)
-							double distSq = dist * dist;
-							detectionScore = (targetRadius * targetRadius) / (distSq * distSq) * 1e15 * sensitivity;
+							double distSqSq = distSq * distSq;
+							detectionScore = (targetRadius * targetRadius) / (distSqSq) * 1e15 * sensitivity;
 							break;
 					}
 

@@ -51,19 +51,15 @@ namespace Gravitas2D
 		public double Mass;
 		public double Radius;
 		public double InertiaTensor;
-		public float2 LinearDamping;
-		public float AngularDamping;
 		
 		[HideInInspector] public double InvInertiaTensor;
 		[HideInInspector] public double InvMass;
 
-		public VehicleModel(double mass, double radius, double inertiaTensor = 0, float2 linearDamping = default, float angularDamping = 0)
+		public VehicleModel(double mass, double radius, double inertiaTensor = 0)
 		{
 			Mass = mass;
 			Radius = radius;
 			InertiaTensor = inertiaTensor == 0 ? 0.4 * mass * radius * radius : inertiaTensor;
-			LinearDamping = linearDamping;
-			AngularDamping = angularDamping;
 			
 			// Input validation to prevent divide-by-zero errors in physics calculations
 			InvInertiaTensor = InertiaTensor <= 0 ? 0 : 1.0 / InertiaTensor;
