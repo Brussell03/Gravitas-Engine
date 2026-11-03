@@ -2,10 +2,10 @@
 	{
 		"bodyIdentifier": "Earth",
 		"owned": true,
+		"type": "celestial",
 		"vehicleModel": {
 			"mass": 5.97219e24,
-			"radius": 6371000.0,
-			"celestial": true
+			"radius": 6371000.0
 		},
 		"initialState": {
 			"position": [0.0, 0.0],
@@ -25,10 +25,10 @@
 	{
 		"bodyIdentifier": "Moon",
 		"owned": true,
+		"type": "celestial",
 		"vehicleModel": {
 			"mass": 7.342e22,
-			"radius": 1737400.0,
-			"celestial": true
+			"radius": 1737400.0
 		},
 		"initialState": {
 			"position": [0.0, 384400000.0],
@@ -40,10 +40,10 @@
 	{
 		"bodyIdentifier": "Ship 5",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [0.0, 386400000.0],
@@ -84,10 +84,10 @@
 	{
 		"bodyIdentifier": "Recon 1",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 8,
-			"celestial": false
+			"radius": 8
 		},
 		"initialState": {
 			"position": [0, 20000000],
@@ -117,10 +117,10 @@
 	{
 		"bodyIdentifier": "Recon 2",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 8,
-			"celestial": false
+			"radius": 8
 		},
 		"initialState": {
 			"position": [0, -20000000],
@@ -150,10 +150,10 @@
 	{
 		"bodyIdentifier": "Ship 1",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [0.0, -6771000.0],
@@ -194,10 +194,10 @@
 	{
 		"bodyIdentifier": "Ship 6",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [0.0, -6771100.0],
@@ -238,10 +238,10 @@
 	{
 		"bodyIdentifier": "Ship 7",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [0.0, -6771200.0],
@@ -282,10 +282,10 @@
 	{
 		"bodyIdentifier": "Ship 2",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [-6771000.0, 0.0],
@@ -326,10 +326,10 @@
 	{
 		"bodyIdentifier": "Ship 3",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [6771000.0, 0],
@@ -370,10 +370,10 @@
 	{
 		"bodyIdentifier": "Ship 4",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 30.0,
-			"celestial": false
+			"radius": 30.0
 		},
 		"initialState": {
 			"position": [0.0, 6771000.0],
@@ -414,10 +414,10 @@
 	{
 		"bodyIdentifier": "Satellite 2",
 		"owned": true,
+		"type": "vehicle",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 2.0,
-			"celestial": false
+			"radius": 2.0
 		},
 		"initialState": {
 			"position": [0.0, 7071000.0],
@@ -437,10 +437,10 @@
 	{
 		"bodyIdentifier": "Mining Station",
 		"owned": true,
+		"type": "station",
 		"vehicleModel": {
 			"compositionIndex": 0,
-			"radius": 500.0,
-			"celestial": false
+			"radius": 500.0
 		},
 		"initialState": {
 			"position": [0.0, -8771000.0],
@@ -460,10 +460,10 @@
 	{
 		"bodyIdentifier": "M-Type Asteroid",
 		"owned": false,
+		"type": "asteroid",
 		"vehicleModel": {
 			"compositionIndex": 1,
-			"radius": 1000.0,
-			"celestial": false
+			"radius": 1000.0
 		},
 		"initialState": {
 			"position": [-2000000.0, -10071000.0],

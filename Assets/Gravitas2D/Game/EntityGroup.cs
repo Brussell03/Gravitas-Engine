@@ -24,7 +24,7 @@ namespace GravitasDemo
 		{
 			_entities = new List<Entity>();
 
-			if (firstEntity != null && !firstEntity.IsDestroyed)
+			if (firstEntity != null && !firstEntity.IsDestroyed && firstEntity.IsGroupable)
 			{
 				if (firstEntity.InGroup) firstEntity.LeaveGroup();
 				_entities.Add(firstEntity);
@@ -33,7 +33,7 @@ namespace GravitasDemo
 
 			foreach (var entity in otherEntities)
 			{
-				if (entity == null || entity.IsDestroyed) continue;
+				if (entity == null || entity.IsDestroyed || !entity.IsGroupable) continue;
 				if (_entities.Contains(entity)) continue; // Allows first entity to also be in other entities without causing duplication
 				if (entity.InGroup) entity.LeaveGroup();
 				_entities.Add(entity);
@@ -60,7 +60,7 @@ namespace GravitasDemo
 
 		public bool AddEntity(Entity entity)
 		{
-			if (entity == null || entity.IsDestroyed) return false;
+			if (entity == null || entity.IsDestroyed || !entity.IsGroupable) return false;
 			if (_entities.Contains(entity)) return false;
 
 			_entities.Add(entity);

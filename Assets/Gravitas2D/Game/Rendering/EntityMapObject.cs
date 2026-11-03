@@ -73,7 +73,7 @@ namespace GravitasDemo.Rendering
 				_imageComponent.material = null;
 				_imageComponent.sprite = SimulationRenderer.Instance.GetBodyImage(entity.Type);
 
-				_baseColor = _entity.IsOwned && _entity.IsVehicle ? Color.royalBlue : Color.floralWhite;
+				_baseColor = _entity.IsOwned && (_entity.IsVehicle || _entity.IsStation) ? Color.royalBlue : Color.floralWhite;
 				_imageComponent.color = entity.IsObserved ? _baseColor : _baseColor * 0.6f;
 			}
 			

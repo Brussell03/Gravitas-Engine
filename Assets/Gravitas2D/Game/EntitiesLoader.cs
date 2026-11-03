@@ -32,7 +32,6 @@ namespace GravitasDemo
 					double mass = jsonData.vehicleModel.mass;
 					int compositionIndex = jsonData.vehicleModel.compositionIndex;
 					double radius = jsonData.vehicleModel.radius;
-					bool celestial = jsonData.vehicleModel.celestial;
 					bool owned = jsonData.owned;
 					
 					// Convert VehicleModel
@@ -132,10 +131,51 @@ namespace GravitasDemo
 						}
 					}
 
-					EntityType entityType = celestial ? EntityType.CelestialBody : EntityType.Asteroid;
-					if (capabilities.Count != 0) entityType = EntityType.Vehicle;
+					// Parse and manage EntityType from JSON configuration
+					EntityType entityType = EntityType.Asteroid;
+					if (!string.IsNullOrEmpty(jsonData.type))
+					{
+						string typeStr = jsonData.type.ToLowerInvariant();
+						switch (typeStr)
+						{
+							case "celestial":
+							case "celestialbody":
+								entityType = EntityType.CelestialBody;
+								break;
+							case "asteroid":
+								entityType = EntityType.Asteroid;
+								break;
+							case "vehicle":
+								entityType = EntityType.Vehicle;
+								break;
+							case "station":
+								entityType = EntityType.Station;
+								break;
+							case "missile":
+								entityType = EntityType.Missile;
+								break;
+							case "projectile":
+								entityType = EntityType.Projectile;
+								break;
+							default:
+								if (Enum.TryParse(jsonData.type, true, out EntityType parsedEnum))
+								{
+									entityType = parsedEnum;
+								}
+								else
+								{
+									if (capabilities.Count != 0) entityType = EntityType.Vehicle;
+								}
+								break;
+						}
+					}
+					else
+					{
+						if (capabilities.Count != 0) entityType = EntityType.Vehicle;
+					}
 
-					EntityCreation.Create(jsonData.bodyIdentifier, vehicleModel, spawnPos, spawnVel, orientation, angularVelocity, compositionIndex, owned, entityType, celestial ? BodySpawnOptions.Celestial : BodySpawnOptions.Default, capabilities);
+					var spawnOptions = entityType == EntityType.CelestialBody ? BodySpawnOptions.Celestial : BodySpawnOptions.Default;
+					EntityCreation.Create(jsonData.bodyIdentifier, vehicleModel, spawnPos, spawnVel, orientation, angularVelocity, compositionIndex, owned, entityType, spawnOptions, capabilities);
 				}
 			}
 			catch (FileNotFoundException)
@@ -167,7 +207,6 @@ namespace GravitasDemo
 			public double mass { get; set; }
 			public int compositionIndex { get; set; }
 			public double radius { get; set; }
-			public bool celestial { get; set; }
 		}
 
 		public class CapabilityJsonData
@@ -194,6 +233,7 @@ namespace GravitasDemo
 		{
 			public string bodyIdentifier { get; set; }
 			public bool owned { get; set; }
+			public string type { get; set; }
 			public VehicleModelData vehicleModel { get; set; }
 			public InitialStateData initialState { get; set; }
 			public List<CapabilityJsonData> capabilities { get; set; }

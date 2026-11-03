@@ -24,7 +24,10 @@ namespace GravitasDemo
 
 			if (PhysicsBodyCreation.CreateBody(name, vehicleModel, spawnPos, spawnVel, orientation, angVel, compositionIndex, warheadEnergy, out PhysicsBody physicsBody, options))
 			{
-				Entity entity = new Entity(physicsBody, name, type, isOwned: isOwned);
+				Entity entity;
+				if (type == EntityType.Station) entity = new StationEntity(physicsBody, name, isOwned);
+				else entity = new Entity(physicsBody, name, type, isOwned: isOwned);
+				
 				if (EntitiesManager.Instance.RegisterEntity(entity))
 				{
 					if (capabilities != null)

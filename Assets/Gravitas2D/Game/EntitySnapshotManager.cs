@@ -24,7 +24,6 @@ namespace GravitasDemo
 		public double mass;
 		public int compositionIndex;
 		public double radius;
-		public bool celestial;
 	}
 
 	[Serializable]
@@ -67,6 +66,20 @@ namespace GravitasDemo
 
 	public static class EntitySnapshotManager
 	{
+		private static string ConvertEntityTypeToString(EntityType type)
+		{
+			switch (type)
+			{
+				case EntityType.CelestialBody: return "celestial";
+				case EntityType.Asteroid: return "asteroid";
+				case EntityType.Vehicle: return "vehicle";
+				case EntityType.Station: return "station";
+				case EntityType.Missile: return "missile";
+				case EntityType.Projectile: return "projectile";
+				default: return type.ToString().ToLowerInvariant();
+			}
+		}
+
 		/// <summary>
 		/// Captures an in-memory snapshot of all active entities, their exact EntityTypes, physics states, and navigation configurations.
 		/// </summary>
@@ -87,14 +100,13 @@ namespace GravitasDemo
 				var snapshot = new EntitySnapshot
 				{
 					bodyIdentifier = entity.Name,
-					entityType = entity.Type.ToString(),
+					entityType = ConvertEntityTypeToString(entity.Type),
 					owned = entity.IsOwned,
 					vehicleModel = new VehicleModelSnapshot
 					{
 						mass = entity.Mass,
 						radius = entity.Radius,
-						compositionIndex = 0,
-						celestial = entity.IsCelestial
+						compositionIndex = 0
 					},
 					initialState = new InitialStateSnapshot
 					{
@@ -199,7 +211,6 @@ namespace GravitasDemo
 				double mass = snap.vehicleModel.mass;
 				int compositionIndex = snap.vehicleModel.compositionIndex;
 				double radius = snap.vehicleModel.radius;
-				bool celestial = snap.vehicleModel.celestial;
 				bool owned = snap.owned;
 
 				VehicleModel vehicleModel = mass == 0 
@@ -291,18 +302,50 @@ namespace GravitasDemo
 					}
 				}
 
-				// Parse exact EntityType
+				// Parse exact EntityType properly
 				EntityType entityType = EntityType.Asteroid;
-				if (!string.IsNullOrEmpty(snap.entityType) && Enum.TryParse(snap.entityType, true, out EntityType parsedType))
+				if (!string.IsNullOrEmpty(snap.entityType))
 				{
-					entityType = parsedType;
+					string typeStr = snap.entityType.ToLowerInvariant();
+					switch (typeStr)
+					{
+						case "celestial":
+						case "celestialbody":
+							entityType = EntityType.CelestialBody;
+							break;
+						case "asteroid":
+							entityType = EntityType.Asteroid;
+							break;
+						case "vehicle":
+							entityType = EntityType.Vehicle;
+							break;
+						case "station":
+							entityType = EntityType.Station;
+							break;
+						case "missile":
+							entityType = EntityType.Missile;
+							break;
+						case "projectile":
+							entityType = EntityType.Projectile;
+							break;
+						default:
+							if (Enum.TryParse(snap.entityType, true, out EntityType parsedEnum))
+							{
+								entityType = parsedEnum;
+							}
+							else
+							{
+								if (capabilities.Count != 0) entityType = EntityType.Vehicle;
+							}
+							break;
+					}
 				}
 				else
 				{
-					entityType = celestial ? EntityType.CelestialBody : EntityType.Asteroid;
 					if (capabilities.Count != 0) entityType = EntityType.Vehicle;
 				}
 
+				var spawnOptions = entityType == EntityType.CelestialBody ? BodySpawnOptions.Celestial : BodySpawnOptions.Default;
 				EntityCreation.Create(
 					snap.bodyIdentifier,
 					vehicleModel,
@@ -313,7 +356,7 @@ namespace GravitasDemo
 					compositionIndex,
 					owned,
 					entityType,
-					celestial ? BodySpawnOptions.Celestial : BodySpawnOptions.Default,
+					spawnOptions,
 					capabilities
 				);
 			}

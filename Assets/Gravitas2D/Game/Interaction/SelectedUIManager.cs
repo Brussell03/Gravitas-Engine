@@ -16,9 +16,10 @@ namespace GravitasDemo.Interaction
 
 		[SerializeField] private TextMeshProUGUI _nameLabel;
 		[SerializeField] private TextMeshProUGUI _compositionLabel;
+		[SerializeField] private TextMeshProUGUI _massLabel;
 		[SerializeField] private TextMeshProUGUI _radiusLabel;
 		[SerializeField] private TextMeshProUGUI _velocityLabel;
-		[SerializeField] private TextMeshProUGUI _navigableLabel;
+		[SerializeField] private TextMeshProUGUI _taskLabel;
 		[SerializeField] private TextMeshProUGUI _railgunLabel;
 		[SerializeField] private TextMeshProUGUI _missileLabel;
 
@@ -35,7 +36,7 @@ namespace GravitasDemo.Interaction
 		private void Awake()
 		{
 			// Fail loudly if UI bindings are missing to prevent continuous runtime exceptions
-			if (_selectedPanelContent == null || _entityPanelContent == null || _groupPanelContent == null || _firePanelContent == null || _navPanelContent == null || _nameLabel == null || _velocityLabel == null || _missileLabel == null || _compositionLabel == null || _navigableLabel == null || _radiusLabel == null || _railgunLabel == null)
+			if (_selectedPanelContent == null || _entityPanelContent == null || _groupPanelContent == null || _firePanelContent == null || _navPanelContent == null || _nameLabel == null || _velocityLabel == null || _missileLabel == null || _compositionLabel == null || _taskLabel == null || _radiusLabel == null || _railgunLabel == null)
 			{
 				Debug.LogError($"[{nameof(SelectedUIManager)}] Missing required UI references. Disabling component.");
 				enabled = false;
@@ -95,9 +96,10 @@ namespace GravitasDemo.Interaction
 		{
 			_nameLabel.text = entity.Name;
 			_compositionLabel.text = entity.Composition.Name;
+			_massLabel.text = entity.Mass.ToString();
 			_radiusLabel.text = entity.Radius.ToString(textFormat);
 			_velocityLabel.text = math.length(entity.Velocity).ToString(textFormat);
-			_navigableLabel.text = entity.IsNavigable ? "Yes" : "No";
+			_taskLabel.text = entity.CurrentTask?.TaskName ?? "None";
 			_railgunLabel.text = entity.IsLauncher ? entity.LaunchCapability.Ammo.ToString() : "None";
 			_missileLabel.text = entity.IsMissileLauncher ? entity.MissileCapability.Ammo.ToString() : "None";
 

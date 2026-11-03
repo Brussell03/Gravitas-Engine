@@ -4,7 +4,7 @@ namespace GravitasDemo
 {
 	public class StationEntity : Entity
 	{
-		public StationEntity(PhysicsBody body, string name, EntityType type, bool isOwned = false) : base(body, name, type, isOwned)
+		public StationEntity(PhysicsBody body, string name, bool isOwned = false) : base(body, name, EntityType.Station, isOwned)
 		{
 			
 		}
