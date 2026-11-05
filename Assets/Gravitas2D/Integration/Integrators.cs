@@ -109,7 +109,7 @@ namespace Gravitas2D
 			in double moment,
 			in NativeArray<GravitySourceData> gravitationalBodies,
 			in NativeList<int> gravitationalBodiesIndices,
-			float time,
+			double time,
 			float timeStep,
 			int physicsBodyIndex,
 			out StateVector integratedState)
@@ -165,7 +165,7 @@ namespace Gravitas2D
 			in double moment,
 			in NativeArray<GravitySourceData> gravitationalBodies,
 			in NativeList<int> gravitationalBodiesIndices,
-			float time,
+			double time,
 			float timeStep,
 			int bodyIndex,
 			out StateVector integratedState)

@@ -85,10 +85,10 @@ GameObject:
   m_Component:
   - component: {fileID: 6372679586598631939}
   - component: {fileID: 4788757402572869300}
-  - component: {fileID: 6086411589914965580}
   - component: {fileID: 6009677229272609979}
+  - component: {fileID: 4254073884588870829}
   m_Layer: 5
-  m_Name: EntityPrefab
+  m_Name: CelestialPrefab
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -122,18 +122,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 5422171502308948949}
   m_CullTransparentMesh: 1
---- !u!114 &6086411589914965580
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5422171502308948949}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 295a6d9c05bee224d8259732bfb9c91a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!114 &6009677229272609979
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -146,7 +134,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: eadfb9f28f1277949be5f70c368a9520, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_Material: {fileID: 0}
-  m_Color: {r: 0, g: 0, b: 0, a: 0}
-  m_RaycastTarget: 1
-  m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
+--- !u!114 &4254073884588870829
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5422171502308948949}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0d0a250236252384bb34847a0594d016, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 

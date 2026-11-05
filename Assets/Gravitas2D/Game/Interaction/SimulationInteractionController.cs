@@ -6,7 +6,6 @@ using Gravitas2D;
 using System.Linq;
 using UnityEngine.UI;
 using TMPro;
-using UnityEngine.EventSystems;
 using GravitasDemo.Rendering;
 
 namespace GravitasDemo.Interaction
@@ -55,19 +54,19 @@ namespace GravitasDemo.Interaction
 		private SimulationRenderer _renderer;
 
 		public MapObject HoveredMapObject => _hoveredMapObject;
-		public Entity HoveredEntity => (_hoveredMapObject as EntityMapObject)?.Entity;
-		public EntityGroup HoveredGroup => (_hoveredMapObject as EntityGroupMapObject)?.Group;
+		public Entity HoveredEntity => CircularRaycastTarget.IsAlive(_hoveredMapObject) ? _hoveredMapObject.Entity : null;
+		public EntityGroup HoveredGroup => CircularRaycastTarget.IsAlive(_hoveredMapObject) ? (_hoveredMapObject as EntityGroupMapObject)?.Group : null;
 		
 		public MapObject SelectedMapObject => _selectedMapObjects.Count > _selectionIndex ? _selectedMapObjects[_selectionIndex] : null;
-		public Entity SelectedEntity => (SelectedMapObject as EntityMapObject)?.Entity;
-		public EntityGroup SelectedGroup => (SelectedMapObject as EntityGroupMapObject)?.Group;
+		public Entity SelectedEntity => CircularRaycastTarget.IsAlive(SelectedMapObject) ? SelectedMapObject.Entity : null;
+		public EntityGroup SelectedGroup => CircularRaycastTarget.IsAlive(SelectedMapObject) ? (SelectedMapObject as EntityGroupMapObject)?.Group : null;
 		public List<MapObject> SelectedMapObjects => _selectedMapObjects;
 		
 		public MapObject TargetedMapObject => _targetedMapObject;
-		public Entity TargetedEntity => (_targetedMapObject as EntityMapObject)?.Entity;
+		public Entity TargetedEntity => CircularRaycastTarget.IsAlive(_targetedMapObject) ? _targetedMapObject.Entity : null;
 		
 		public MapObject TrackedMapObject => _trackedMapObject;
-		public Entity TrackedEntity => (_trackedMapObject as EntityMapObject)?.Entity;
+		public Entity TrackedEntity => CircularRaycastTarget.IsAlive(_trackedMapObject) ? _trackedMapObject.Entity : null;
 		
 		public HashSet<MapObject> PinnedMapObjects => _pinnedMapObjects;
 
@@ -80,7 +79,7 @@ namespace GravitasDemo.Interaction
 			if (entity == null) return false;
 			foreach (var obj in _selectedMapObjects)
 			{
-				if (obj is EntityMapObject ego && ego.Entity == entity) return true;
+				if (CircularRaycastTarget.IsAlive(obj) && obj.Entity == entity) return true;
 			}
 			return false;
 		}
@@ -90,7 +89,7 @@ namespace GravitasDemo.Interaction
 			if (entity == null) return false;
 			foreach (var obj in _pinnedMapObjects)
 			{
-				if (obj is EntityMapObject ego && ego.Entity == entity) return true;
+				if (CircularRaycastTarget.IsAlive(obj) && obj.Entity == entity) return true;
 			}
 			return false;
 		}
@@ -98,7 +97,7 @@ namespace GravitasDemo.Interaction
 		public bool IsEntityHovered(Entity entity)
 		{
 			if (entity == null) return false;
-			return _hoveredMapObject is EntityMapObject ego && ego.Entity == entity;
+			return CircularRaycastTarget.IsAlive(_hoveredMapObject) && _hoveredMapObject.Entity == entity;
 		}
 
 		public bool IsEntitySelectedPinnedOrHovered(Entity entity)
@@ -200,10 +199,10 @@ namespace GravitasDemo.Interaction
 			if (_hoverIndicator == null) return;
 
 			Entity hoveredEnt = HoveredEntity;
-			if (_hoveredMapObject != null && (hoveredEnt == null || !hoveredEnt.IsDestroyed))
+			if (CircularRaycastTarget.IsAlive(_hoveredMapObject) && (hoveredEnt == null || !hoveredEnt.IsDestroyed))
 			{
 				_hoverIndicator.gameObject.SetActive(true);
-				Vector2 uiPos = _hoveredMapObject.RectTransform.localPosition;
+				Vector2 uiPos = _hoveredMapObject.ViewPosition;
 				_hoverIndicator.localPosition = new Vector3(uiPos.x, uiPos.y, _hoverIndicator.localPosition.z);
 
 				string text = hoveredEnt != null ? $"{hoveredEnt.Name}\nControlled: {(hoveredEnt.IsOwned ? "Yes" : "No")}" : "Group Object";
@@ -248,7 +247,7 @@ namespace GravitasDemo.Interaction
 				MapObject mapObj = kvp.Key;
 				RectTransform indicator = kvp.Value;
 
-				if (mapObj == null || mapObj.IsDestroyed) continue;
+				if (!CircularRaycastTarget.IsAlive(mapObj)) continue;
 
 				bool shouldShow = (mapObj != _hoveredMapObject);
 				if (indicator.gameObject.activeSelf != shouldShow)
@@ -258,7 +257,7 @@ namespace GravitasDemo.Interaction
 
 				if (shouldShow)
 				{
-					indicator.localPosition = new Vector3(mapObj.RectTransform.localPosition.x, mapObj.RectTransform.localPosition.y, indicator.localPosition.z);
+					indicator.localPosition = new Vector3(mapObj.ViewPosition.x, mapObj.ViewPosition.y, indicator.localPosition.z);
 				}
 			}
 		}
@@ -299,62 +298,34 @@ namespace GravitasDemo.Interaction
 		// }
 
 		/// <summary>
-		/// Finds the closest visible map object to the cursor position among all 
-		/// raycast hits using consistent visualization area local UI coordinates.
+		/// Finds the closest visible map object whose circular hit region contains the cursor,
+		/// using the visualization area's local UI coordinates.
 		/// </summary>
 		public MapObject FindClosestMapObjectAtUIPosition(Vector2 localUIPos)
 		{
 			RectTransform visArea = _renderer.VisualizationArea;
-			if (visArea == null || EventSystem.current == null) return null;
+			if (visArea == null) return null;
 
-			Canvas canvas = visArea.GetComponentInParent<Canvas>();
-			Camera cam = (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? canvas.worldCamera : null;
-
-			// Convert visualization area local UI position to screen point for raycasting
-			Vector2 screenPoint = RectTransformUtility.WorldToScreenPoint(cam, visArea.TransformPoint(localUIPos));
-
-			PointerEventData pointerData = new PointerEventData(EventSystem.current)
-			{
-				position = screenPoint
-			};
-
-			List<RaycastResult> raycastResults = new List<RaycastResult>();
-			EventSystem.current.RaycastAll(pointerData, raycastResults);
-
+			// The GPU map is not composed of EventSystem Graphics. Test the pooled logical
+			// map-object handles directly, using the exact same local coordinate system as
+			// the renderer and the original circular target.
+			IReadOnlyList<MapObject> visibleObjects = _renderer.VisibleMapObjects;
+			float hoverMarginPixels = visArea.rect.width * _hoverMarginScreenPct;
 			MapObject closestMapObject = null;
 			float minSqrDistance = float.MaxValue;
 
-			// Evaluate distance across all valid raycast hits to find the truly closest entity/group
-			for (int i = 0; i < raycastResults.Count; i++)
+			for (int i = 0; i < visibleObjects.Count; i++)
 			{
-				GameObject hitObject = raycastResults[i].gameObject;
-				if (hitObject == null) continue;
+				MapObject mapObject = visibleObjects[i];
+				if (!CircularRaycastTarget.IsAlive(mapObject)) continue;
 
-				// 1. Check if hit object is an individual entity visual
-				EntityMapObject entityVisual = hitObject.GetComponent<EntityMapObject>();
-				if (entityVisual != null && entityVisual.Entity != null && !entityVisual.Entity.IsDestroyed)
-				{
-					Vector2 bodyUIPos = _renderer.SimPositionToViewUI(entityVisual.Entity.Position);
-					float sqrDist = (localUIPos - bodyUIPos).sqrMagnitude;
-					if (sqrDist < minSqrDistance)
-					{
-						minSqrDistance = sqrDist;
-						closestMapObject = entityVisual;
-					}
-					continue;
-				}
+				if (!mapObject.Raycast(localUIPos, hoverMarginPixels)) continue;
 
-				// 2. Check if hit object is an entity group visual
-				EntityGroupMapObject groupVisual = hitObject.GetComponent<EntityGroupMapObject>();
-				if (groupVisual != null && groupVisual.Group != null && !groupVisual.Group.IsDestroyed)
+				float sqrDistance = (localUIPos - mapObject.ViewPosition).sqrMagnitude;
+				if (sqrDistance < minSqrDistance)
 				{
-					Vector2 groupUIPos = _renderer.SimPositionToViewUI(groupVisual.Group.Position);
-					float sqrDist = (localUIPos - groupUIPos).sqrMagnitude;
-					if (sqrDist < minSqrDistance)
-					{
-						minSqrDistance = sqrDist;
-						closestMapObject = groupVisual;
-					}
+					minSqrDistance = sqrDistance;
+					closestMapObject = mapObject;
 				}
 			}
 
@@ -486,7 +457,7 @@ namespace GravitasDemo.Interaction
 
 		private void HandleDestroyedObjects()
 		{
-			if (_hoveredMapObject != null && _hoveredMapObject.IsDestroyed)
+			if (_hoveredMapObject != null && !CircularRaycastTarget.IsAlive(_hoveredMapObject))
 			{
 				OnMapObjectUnhovered?.Invoke(_hoveredMapObject, _selectedMapObjects.Contains(_hoveredMapObject) || _hoveredMapObject == _targetedMapObject || _pinnedMapObjects.Contains(_hoveredMapObject));
 				_hoveredMapObject = null;
@@ -494,17 +465,17 @@ namespace GravitasDemo.Interaction
 
 			for (int i = _selectedMapObjects.Count - 1; i >= 0; i--)
 			{
-				if (_selectedMapObjects[i].IsDestroyed)
+				if (!CircularRaycastTarget.IsAlive(_selectedMapObjects[i]))
 				{
 					if (i == _selectionIndex) _selectionIndex = 0;
 					DeselectMapObject(_selectedMapObjects[i]);
 				}
 			}
 
-			if (_targetedMapObject != null && _targetedMapObject.IsDestroyed) UntargetMapObject();
+			if (_targetedMapObject != null && !CircularRaycastTarget.IsAlive(_targetedMapObject)) UntargetMapObject();
 
 			// Untrack if the tracked object is destroyed
-			if (_trackedMapObject != null && _trackedMapObject.IsDestroyed)
+			if (_trackedMapObject != null && !CircularRaycastTarget.IsAlive(_trackedMapObject))
 			{
 				UntrackMapObject();
 			}
@@ -512,7 +483,7 @@ namespace GravitasDemo.Interaction
 			List<MapObject> objectsToUnpin = new List<MapObject>();
 			foreach (var mapObj in _pinnedMapObjects)
 			{
-				if (mapObj.IsDestroyed) objectsToUnpin.Add(mapObj);
+				if (!CircularRaycastTarget.IsAlive(mapObj)) objectsToUnpin.Add(mapObj);
 			}
 
 			foreach (var mapObj in objectsToUnpin)
@@ -523,13 +494,16 @@ namespace GravitasDemo.Interaction
 
 		public void SelectMapObject(MapObject mapObj)
 		{
-			Entity ent = (mapObj as EntityMapObject)?.Entity;
-			if (mapObj == null || (ent != null && ent.IsDestroyed) || _selectedMapObjects.Contains(mapObj)) return;
+			if (!CircularRaycastTarget.IsAlive(mapObj)) return;
+			Entity ent = mapObj.Entity;
+			if ((ent != null && ent.IsDestroyed) || _selectedMapObjects.Contains(mapObj)) return;
 
 			_selectedMapObjects.Add(mapObj);
 
-			// Instantiate and initialize selection indicator
-			if (_selectionIndicatorPrefab != null)
+			// Normal entities have no per-entity GameObjects. Their selection rings are
+			// submitted in a GPU-instanced overlay pass by SimulationRenderer. UI-backed
+			// celestials and groups may continue using the configured indicator prefab.
+			if (_selectionIndicatorPrefab != null && !(mapObj is EntityMapObject))
 			{
 				Transform parentTransform = _selectionIndicatorsContainer != null ? _selectionIndicatorsContainer : _renderer.VisualizationArea;
 				RectTransform indicatorInstance = Instantiate(_selectionIndicatorPrefab, parentTransform);
@@ -540,7 +514,7 @@ namespace GravitasDemo.Interaction
 					textComp.text = ent != null ? ent.Name : "Group";
 				}
 
-				indicatorInstance.localPosition = new Vector3(mapObj.RectTransform.localPosition.x, mapObj.RectTransform.localPosition.y, indicatorInstance.localPosition.z);
+				indicatorInstance.localPosition = new Vector3(mapObj.ViewPosition.x, mapObj.ViewPosition.y, indicatorInstance.localPosition.z);
 				indicatorInstance.gameObject.SetActive(mapObj != _hoveredMapObject);
 
 				_selectionIndicators[mapObj] = indicatorInstance;
@@ -588,8 +562,9 @@ namespace GravitasDemo.Interaction
 
 		public void TargetMapObject(MapObject mapObj)
 		{
-			Entity ent = (mapObj as EntityMapObject)?.Entity;
-			if (mapObj == null || (ent != null && ent.IsDestroyed) || _targetedMapObject == mapObj) return;
+			if (!CircularRaycastTarget.IsAlive(mapObj)) return;
+			Entity ent = mapObj.Entity;
+			if ((ent != null && ent.IsDestroyed) || _targetedMapObject == mapObj) return;
 
 			if (_targetedMapObject != null) UntargetMapObject();
 			_targetedMapObject = mapObj;
@@ -620,8 +595,9 @@ namespace GravitasDemo.Interaction
 
 		public void PinMapObject(MapObject mapObj)
 		{
-			Entity ent = (mapObj as EntityMapObject)?.Entity;
-			if (mapObj == null || (ent != null && ent.IsDestroyed)) return;
+			if (!CircularRaycastTarget.IsAlive(mapObj)) return;
+			Entity ent = mapObj.Entity;
+			if (ent != null && ent.IsDestroyed) return;
 			
 			if (_pinnedMapObjects.Add(mapObj))
 			{
@@ -678,12 +654,12 @@ namespace GravitasDemo.Interaction
 
 		public void TrackMapObject(MapObject mapObj)
 		{
-			if (mapObj == null) return;
+			if (!CircularRaycastTarget.IsAlive(mapObj)) return;
 
 			UntrackMapObject();
 			_trackedMapObject = mapObj;
 			
-			Entity ent = (mapObj as EntityMapObject)?.Entity;
+			Entity ent = mapObj.Entity;
 			if (ent != null)
 			{
 				ent.SetTracked(true);
@@ -702,7 +678,7 @@ namespace GravitasDemo.Interaction
 		{
 			if (_trackedMapObject != null)
 			{
-				Entity ent = (_trackedMapObject as EntityMapObject)?.Entity;
+				Entity ent = CircularRaycastTarget.IsAlive(_trackedMapObject) ? _trackedMapObject.Entity : null;
 				if (ent != null)
 				{
 					ent.PhysicsBody.OnTrackedPositionUpdated -= HandleTrackPanning;
@@ -740,7 +716,7 @@ namespace GravitasDemo.Interaction
 				List<Entity> ents = new List<Entity>();
 				foreach (var obj in _selectedMapObjects)
 				{
-					Entity e = (obj as EntityMapObject)?.Entity;
+					Entity e = CircularRaycastTarget.IsAlive(obj) ? obj.Entity : null;
 					if (e != null) ents.Add(e);
 				}
 				if (ents.Count > 1)

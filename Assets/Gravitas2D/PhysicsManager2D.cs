@@ -26,9 +26,14 @@ namespace Gravitas2D
 		[Header("Broadphase Collision")]
 		[SerializeField, Min(1f)] private double _spatialCellSize = 1000000f;
 
+		[Header("Gravity Ephemeris")]
+		[SerializeField, Min(60f)] private double _gravityEphemerisHorizon = 604800.0; // 7 days
+		[SerializeField, Min(1f)] private double _gravityEphemerisSampleInterval = 60.0; // Stored sample cadence
+		[SerializeField, Min(0.1f)] private double _gravityEphemerisIntegrationStep = 10.0; // RK4 maximum step
+
 		public event Action OnPhysicsUpdated;
 		public event Action<bool> OnSimulationPaused;
-		public event Action<PhysicsBody, PhysicsBody> OnSimulationOriginatedBody;
+		public event Action<PhysicsBody, PhysicsBody, bool> OnSimulationOriginatedBody;
 
 		private float _physicsTimeStep;
 		private float _currentTimeStep;
@@ -36,7 +41,8 @@ namespace Gravitas2D
 		private bool _isInitialized = false;
 		private bool _isPaused = true;
 		private bool _isForcePaused = false;
-		private float _simulationElapsedTime;
+		private double _simulationElapsedTime;
+		private GravityEphemeris _gravityEphemeris;
 		private int _stepCount = 0;
 		private float _fractureRadiusThreshold;
 		private Bounds2D _simulationBounds;
@@ -79,7 +85,7 @@ namespace Gravitas2D
 		public bool IsPhysicsStepRunning => _physicsJobScheduled;
 		public List<PhysicsBody> PhysicsBodies => _physicsBodies;
 		public Dictionary<string, PhysicsBody> PhysicsBodyLookup => _physicsBodyLookup;
-		public float SimulationElapsedTime => _simulationElapsedTime;
+		public double SimulationElapsedTime => _simulationElapsedTime;
 		public Bounds2D SimulationBounds => _simulationBounds;
 		public float ScaledPhysicsTimeStep => _physicsTimeStep * _timeStepMultiplier;
 		public bool IsAtSpeed1 => _timeStepMultiplier == 1f;
@@ -91,6 +97,32 @@ namespace Gravitas2D
 		public List<CompositionProfile> CompositionProfiles => _compositionProfiles;
 		public NativeParallelMultiHashMap<int, int> SpatialHashMap => _spatialHashMap;
 		public double SpatialCellSize => _spatialCellSize;
+
+		/// <summary>
+		/// Returns a read-only gravity prediction view referenced to the current simulation time.
+		/// The manager extends its shared horizon on demand when a consumer requests more coverage.
+		/// </summary>
+		public GravityEphemerisView GetGravityEphemerisView(double minimumHorizon = 0.0)
+		{
+			if (!_isInitialized || !_bodyStateVectors.IsCreated || !_bodyVehicleModels.IsCreated) return default;
+			MaintainGravityEphemeris(minimumHorizon);
+			return _gravityEphemeris != null ? _gravityEphemeris.CreateView(_simulationElapsedTime) : default;
+		}
+
+		private void MaintainGravityEphemeris(double minimumHorizon = 0.0)
+		{
+			if (!_isInitialized || !_bodyStateVectors.IsCreated || !_bodyVehicleModels.IsCreated ||
+				!GravitySources.GravitationalBodyIndices.IsCreated) return;
+
+			if (_gravityEphemeris == null) _gravityEphemeris = new GravityEphemeris();
+			double horizon = math.max(60.0, math.max(_gravityEphemerisHorizon, minimumHorizon));
+			// Preserve an expanded horizon if a navigation consumer requested more than the inspector default.
+			horizon = math.max(horizon, _gravityEphemeris.Horizon);
+			_gravityEphemeris.EnsureCoverage(
+				_simulationElapsedTime, horizon, _gravityEphemerisSampleInterval, _gravityEphemerisIntegrationStep,
+				_bodyStateVectors.AsArray(), _bodyVehicleModels.AsArray(),
+				GravitySources.GravitationalBodyIndices, GravitySources.GravitationalConstant);
+		}
 
 		private struct PendingAddition
 		{
@@ -179,8 +211,10 @@ namespace Gravitas2D
 				}
 			}
 
-			// Initialize gravitational management class
+			// Initialize gravitational management and shared ephemeris. The ephemeris is
+			// seeded lazily once the initial celestial-body batch has been registered.
 			GravitySources.Initialize();
+			_gravityEphemeris = new GravityEphemeris();
 
 			// Mark core setup as complete
 			_isInitialized = true;
@@ -209,6 +243,10 @@ namespace Gravitas2D
 			{
 				ProcessPendingChanges();
 			}
+
+			// Seed/maintain the shared prediction while the simulation is paused as well,
+			// so the first navigation update does not pay the initial horizon-build cost.
+			MaintainGravityEphemeris();
 
 			// 4. Start the next physics step
 			PhysicsStep();
@@ -349,7 +387,7 @@ namespace Gravitas2D
 				ZeroOutList(ref _bodyForces);
 				ZeroOutList(ref _bodyMoments);
 
-				OnPhysicsUpdated?.Invoke();
+				// OnPhysicsUpdated?.Invoke();
 
 				// Process deferred instantiations by decrementing delay timers
 				for (int i = _delayedBodies.Count - 1; i >= 0; i--)
@@ -457,6 +495,8 @@ namespace Gravitas2D
 				ProcessAdditions();
 
 				_simulationElapsedTime += _currentTimeStep;
+				MaintainGravityEphemeris();
+				OnPhysicsUpdated?.Invoke();
 			}
 		}
 
@@ -655,6 +695,8 @@ namespace Gravitas2D
 			if (_bodiesToDestroyQueue.IsCreated) _bodiesToDestroyQueue.Dispose();
 			if (_bodiesToFractureQueue.IsCreated) _bodiesToFractureQueue.Dispose();
 
+			if (_gravityEphemeris != null) _gravityEphemeris.Clear();
+			_gravityEphemeris = null;
 			GravitySources.Cleanup();
 
 			_isInitialized = false;
@@ -684,6 +726,8 @@ namespace Gravitas2D
 			_timeStepMultiplier = 1;
 			_isPaused = true;
 			_stepCount = 0;
+			_simulationElapsedTime = 0.0;
+			if (_gravityEphemeris != null) _gravityEphemeris.Clear();
 
 			GravitySources.RemoveAllSources();
 
@@ -950,6 +994,7 @@ namespace Gravitas2D
 			StateVector originalStateVector = _bodyStateVectors[bodyIndex];
 			VehicleModel originalModel = _bodyVehicleModels[bodyIndex];
 			double bodyRadius = originalModel.Radius;
+			bool isCelestial = _isCelestialMap[bodyIndex];
 
 			FractureProfile profile = null;
 
@@ -987,7 +1032,7 @@ namespace Gravitas2D
 				string newName = $"{_physicsBodies[bodyIndex].Name}_chunk_{i}";
 				PhysicsBody chunkBody = AddBody(startState, vehicleModel, originalCompositionIndex, false, newName, isCollisionTrigger: false);
 
-				OnSimulationOriginatedBody?.Invoke(chunkBody, _physicsBodies[bodyIndex]);
+				OnSimulationOriginatedBody?.Invoke(chunkBody, _physicsBodies[bodyIndex], isCelestial ? true : false);
 			}
 
 			// Destroy or disable the parent body

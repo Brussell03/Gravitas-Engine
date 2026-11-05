@@ -1,58 +1,41 @@
+using Gravitas2D;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace GravitasDemo.Rendering
 {
-	[RequireComponent(typeof(CircularRaycastTarget))]
-	public abstract class MapObject : MonoBehaviour
+	/// <summary>
+	/// Shared logical contract for map objects. It is deliberately an interface rather than
+	/// a MonoBehaviour base class so ordinary entities can be represented by managed data only.
+	/// Entity groups and celestials implement the same contract from their small set of UI objects.
+	/// </summary>
+	public interface MapObject
 	{
-		protected RectTransform _rectTransform;
-		protected Image _imageComponent;
-		protected RectTransform _imageRectTransform;
-		protected CircularRaycastTarget _raycastTarget;
-		protected double _lastScaleReference = -1;
-		protected Color _baseColor;
+		Entity Entity { get; }
+		RectTransform RectTransform { get; }
+		bool IsDestroyed { get; }
+		bool IsVisualActive { get; }
+		bool IsCelestial { get; }
+		string Name { get; }
 
-		public RectTransform RectTransform => _rectTransform;
-		public abstract bool IsDestroyed { get; }
-		public abstract string Name { get; }
+		Vector2 ViewPosition { get; }
+		float PixelDiameter { get; }
+		float RenderRotationDegrees { get; }
+		Sprite RenderSprite { get; }
+		Color RenderColor { get; }
+		Material RenderMaterial { get; }
 
-		protected virtual void Awake()
-		{
-			_rectTransform = GetComponent<RectTransform>();
-			_imageComponent = GetComponentInChildren<Image>();
-
-			_raycastTarget = GetComponent<CircularRaycastTarget>();
-			if (_raycastTarget == null)
-			{
-				_raycastTarget = gameObject.AddComponent<CircularRaycastTarget>();
-			}
-
-			if (_imageComponent != null)
-			{
-				_imageComponent.raycastTarget = false;
-
-				_imageRectTransform = _imageComponent.GetComponent<RectTransform>();
-				if (_imageRectTransform != null && _imageRectTransform != _rectTransform)
-				{
-					_imageRectTransform.anchorMin = new Vector2(0.5f, 0.5f);
-					_imageRectTransform.anchorMax = new Vector2(0.5f, 0.5f);
-					_imageRectTransform.anchoredPosition = Vector2.zero;
-				}
-			}
-
-			if (_rectTransform == null)
-			{
-				Debug.LogError($"[{GetType().Name}] Missing RectTransform component.", this);
-			}
-		}
-
-		public abstract void UpdateVisual();
-		public abstract void Deinitialize();
-
-		public virtual void UpdateTransform(float percX, float percY, float rectWidth, float rectHeight, double boundsSizeX, float minVisiblePixelSize)
-		{
-			_rectTransform.anchoredPosition = new Vector2(percX * rectWidth, percY * rectHeight);
-		}
+		void UpdateVisual();
+		void Deinitialize();
+		void ApplyTransformData(
+			float percX,
+			float percY,
+			float finalPixelSize,
+			float rotationRadians,
+			double boundsSizeX,
+			float rectXMin,
+			float rectXMax,
+			float rectYMin,
+			float rectYMax);
+		bool Raycast(Vector2 localUIPosition, float hoverMarginPixels);
 	}
 }

@@ -1,174 +1,104 @@
 using Gravitas2D;
-using GravitasDemo.Interaction;
-using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.Pool;
-using UnityEngine.UI;
 
 namespace GravitasDemo.Rendering
 {
-	public class EntityMapObject : MapObject
+	/// <summary>
+	/// Data-only visual and interaction handle for a normal (non-celestial) entity.
+	/// This class intentionally does not derive from MonoBehaviour and creates no GameObject.
+	/// All visible pixels are submitted by SimulationRenderer through Graphics.RenderMeshInstanced.
+	/// </summary>
+	public sealed class EntityMapObject : MapObject
 	{
 		private Entity _entity;
-		private IObjectPool<EntityMapObject> _objectPool;
-		private bool _lastObservedState = false;
-
-		private Material _celestialMaterialInstance;
-		private static readonly int LightDirectionID = Shader.PropertyToID("_LightDirection");
-		private static readonly int PlanetRotationID = Shader.PropertyToID("_PlanetRotation");
+		private bool _lastObservedState;
+		private Vector2 _viewPosition;
+		private float _pixelDiameter;
+		private float _renderRotationDegrees;
+		private Sprite _renderSprite;
+		private Color _renderColor = Color.white;
+		private Color _baseColor = Color.white;
 
 		public Entity Entity => _entity;
-		public PhysicsBody PhysicsBody => _entity.PhysicsBody;
+		public PhysicsBody PhysicsBody => _entity != null ? _entity.PhysicsBody : null;
 		public bool LastObservedState => _lastObservedState;
-		public override bool IsDestroyed => _entity == null || _entity.IsDestroyed;
-		public override string Name => _entity.Name;
+		public RectTransform RectTransform => null;
+		public bool IsDestroyed => _entity == null || _entity.IsDestroyed;
+		public bool IsVisualActive => _entity != null && !_entity.IsDestroyed;
+		public bool IsCelestial => false;
+		public string Name => _entity != null ? _entity.Name : string.Empty;
 
-		public IObjectPool<EntityMapObject> ObjectPool { set => _objectPool = value; }
+		public Vector2 ViewPosition => _viewPosition;
+		public float PixelDiameter => _pixelDiameter;
+		public float RenderRotationDegrees => _renderRotationDegrees;
+		public Sprite RenderSprite => _renderSprite;
+		public Color RenderColor => _renderColor;
+		public Material RenderMaterial => null;
 
 		public void InitializeBody(Entity entity)
 		{
+			if (entity == null)
+				throw new System.ArgumentNullException(nameof(entity));
+			if (entity.IsCelestial)
+				throw new System.ArgumentException("Celestial entities must use CelestialMapObject.", nameof(entity));
+
 			_entity = entity;
 			_lastObservedState = entity.IsObserved;
-			_imageComponent.sprite = SimulationRenderer.Instance.GetBodyImage(entity.Type);
+			_renderSprite = SimulationRenderer.Instance != null
+				? SimulationRenderer.Instance.GetBodyImage(entity.Type)
+				: null;
 
-			if (entity.IsCelestial)
-			{
-				_imageComponent.sprite = null;
+			_baseColor = entity.IsOwned && (entity.IsVehicle || entity.IsStation)
+				? Color.royalBlue
+				: Color.floralWhite;
+			_renderColor = entity.IsObserved ? _baseColor : _baseColor * 0.6f;
 
-				Material baseMat = SimulationRenderer.Instance != null ? SimulationRenderer.Instance.PlanetShaderMaterial : null;
-				if (baseMat != null)
-				{
-					if (_celestialMaterialInstance == null)
-					{
-						_celestialMaterialInstance = new Material(baseMat);
-					}
-
-					if (entity.Name.Contains("Sun") || entity.Name.Contains("Star"))
-					{
-						_celestialMaterialInstance.SetColor("_OceanColor", new Color(1.0f, 0.95f, 0.7f));
-						_celestialMaterialInstance.SetColor("_LandColor", new Color(1.0f, 0.85f, 0.4f));
-						_celestialMaterialInstance.SetColor("_RayleighColor", new Color(1.0f, 0.6f, 0.1f));
-						_celestialMaterialInstance.SetFloat("_RayleighDensity", 4.0f);
-					}
-					else
-					{
-						_celestialMaterialInstance.SetColor("_OceanColor", new Color(0.008f, 0.035f, 0.095f));
-						_celestialMaterialInstance.SetColor("_LandColor", new Color(0.06f, 0.18f, 0.07f));
-						_celestialMaterialInstance.SetColor("_DesertColor", new Color(0.32f, 0.25f, 0.15f));
-						_celestialMaterialInstance.SetColor("_RayleighColor", new Color(0.12f, 0.35f, 0.88f));
-						_celestialMaterialInstance.SetColor("_MiegColor", new Color(0.85f, 0.92f, 1.0f));
-						_celestialMaterialInstance.SetColor("_SunsetColor", new Color(1.0f, 0.38f, 0.08f));
-						_celestialMaterialInstance.SetFloat("_RayleighDensity", 4.5f);
-						_celestialMaterialInstance.SetFloat("_MieDensity", 1.0f);
-					}
-
-					_imageComponent.material = _celestialMaterialInstance;
-				}
-
-				_baseColor = Color.white;
-				_imageComponent.color = _baseColor;
-			}
-			else
-			{
-				_imageComponent.material = null;
-				_imageComponent.sprite = SimulationRenderer.Instance.GetBodyImage(entity.Type);
-
-				_baseColor = _entity.IsOwned && (_entity.IsVehicle || _entity.IsStation) ? Color.royalBlue : Color.floralWhite;
-				_imageComponent.color = entity.IsObserved ? _baseColor : _baseColor * 0.6f;
-			}
-			
-			_lastScaleReference = -1;
-
-			_rectTransform.anchorMin = Vector2.zero;
-			_rectTransform.anchorMax = Vector2.zero;
-
-			UpdateVisual();
+			_pixelDiameter = 0f;
+			_renderRotationDegrees = 0f;
+			_viewPosition = Vector2.zero;
 		}
 
-		public override void UpdateVisual()
+		public void UpdateVisual()
 		{
-			_lastObservedState = _entity.IsObserved;
-			if (_entity.IsCelestial) return;
+			if (_entity == null)
+				return;
 
-			bool isObserved = _entity.IsObserved;
-			_imageComponent.color = isObserved ? _baseColor : _baseColor * 0.6f;
+			_lastObservedState = _entity.IsObserved;
+			_renderColor = _entity.IsObserved ? _baseColor : _baseColor * 0.6f;
 		}
 
-		public override void Deinitialize()
+		public void Deinitialize()
 		{
 			_entity = null;
-			if (_imageComponent != null)
-			{
-				_imageComponent.material = null;
-			}
+			_renderSprite = null;
+			_pixelDiameter = 0f;
+			_renderRotationDegrees = 0f;
+			_viewPosition = Vector2.zero;
 		}
 
-		public void Deactivate()
+		public void ApplyTransformData(
+			float percX,
+			float percY,
+			float finalPixelSize,
+			float rotationRadians,
+			double boundsSizeX,
+			float rectXMin,
+			float rectXMax,
+			float rectYMin,
+			float rectYMax)
 		{
-			_objectPool.Release(this);
+			float localX = Mathf.LerpUnclamped(rectXMin, rectXMax, percX);
+			float localY = Mathf.LerpUnclamped(rectYMin, rectYMax, percY);
+			_viewPosition = new Vector2(localX, localY);
+			_pixelDiameter = Mathf.Max(0f, finalPixelSize);
+
+			// Match the orientation previously applied to the entity's RectTransform.
+			_renderRotationDegrees = rotationRadians * Mathf.Rad2Deg - 90f;
 		}
 
-		public override void UpdateTransform(float percX, float percY, float rectWidth, float rectHeight, double boundsSizeX, float minVisiblePixelSize)
+		public bool Raycast(Vector2 localUIPosition, float hoverMarginPixels)
 		{
-			base.UpdateTransform(percX, percY, rectWidth, rectHeight, boundsSizeX, minVisiblePixelSize);
-
-			if (_entity != null && _entity.IsCelestial)
-			{
-				_rectTransform.rotation = Quaternion.identity;
-
-				if (_celestialMaterialInstance != null)
-				{
-					// Calculate world-space light direction from dominant entity (Sun)
-					double2 lightDir = new double2(1, 0);
-					if (EntitiesManager.Instance.EntityLookup.TryGetValue("Sun", out var sunEntity))
-					{
-						double2 relPos = sunEntity.Position - _entity.Position;
-						if (math.lengthsq(relPos) > 1e-6)
-						{
-							lightDir = math.normalize(relPos);
-						}
-					}
-
-					// Pass world-space light direction directly (do not transform by orientation)
-					_celestialMaterialInstance.SetVector(LightDirectionID, new Vector4((float)lightDir.x, (float)lightDir.y, 0, 0));
-					_celestialMaterialInstance.SetFloat(PlanetRotationID, (float)_entity.Orientation);
-				}
-			}
-			else
-			{
-				_rectTransform.rotation = Quaternion.Euler(0, 0, Mathf.Rad2Deg * _entity.Orientation - 90f);
-			}
-
-			// Change Detection: Only update Unity's transform if the zoom level actually changed
-			if (math.abs(_lastScaleReference - boundsSizeX) < 1e-5) return;
-			
-			_lastScaleReference = boundsSizeX;
-
-			// Add additional visual padding to accommodate atmospheric halo
-			float radiusMultiplier = _entity != null && _entity.IsCelestial ? 2.6f : 2.0f;
-			float accuratePixelSize = (float)(PhysicsBody.Radius / boundsSizeX) * rectWidth * radiusMultiplier;
-
-			// Clamp to ensure visibility
-			float finalPixelSize = Mathf.Max(accuratePixelSize, minVisiblePixelSize);
-
-			// Explicitly set child visual image to its correct, unbloated size
-			if (_imageRectTransform != null)
-			{
-				_imageRectTransform.sizeDelta = new Vector2(finalPixelSize, finalPixelSize);
-			}
-
-			// Inflate parent RectTransform size so the raycaster can detect the hover margin
-			float hoverMarginPixels = 10f;
-			if (SimulationRenderer.Instance != null && SimulationRenderer.Instance.VisualizationArea != null)
-			{
-				float pct = SimulationInteractionController.Instance != null 
-					? SimulationInteractionController.Instance.HoverMarginScreenPct 
-					: 0.01f;
-				hoverMarginPixels = SimulationRenderer.Instance.VisualizationArea.rect.width * pct;
-			}
-
-			float totalRectSize = finalPixelSize + (hoverMarginPixels * 2f);
-			_rectTransform.sizeDelta = new Vector2(totalRectSize, totalRectSize);
+			return CircularRaycastTarget.IsHit(this, localUIPosition, hoverMarginPixels);
 		}
 	}
 }

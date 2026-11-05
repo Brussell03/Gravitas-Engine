@@ -32,31 +32,38 @@ namespace GravitasDemo
 
 		// Visual Mappings
 		private readonly Dictionary<Entity, EntityMapObject> _activeVisuals = new Dictionary<Entity, EntityMapObject>();
+		private readonly Dictionary<Entity, CelestialMapObject> _activeCelestialVisuals = new Dictionary<Entity, CelestialMapObject>();
 		private readonly List<Entity> _entitiesToRemove = new List<Entity>();
 
 		// Job System Variables & Time-Slicing
 		private JobHandle _filterJobHandle;
 		private bool _isJobRunning = false;
-		private int _scheduledEntityCount = 0;
+		// private int _scheduledEntityCount = 0;
 		private int _currentFrameSlice = 0;
-		private const int TimeSliceCount = 4; // Distributes sensor checks across 4 frames
+		private const int TimeSliceCount = 1; // Distributes sensor checks across 4 frames
 		
+		// Synchronized Native Arrays (Packed & Contiguous)
 		private NativeArray<double2> _jobPositions;
 		private NativeArray<double> _jobRadii;
 		private NativeArray<double> _jobMasses;
 		private NativeArray<bool> _jobIsOwned;
 		private NativeArray<bool> _jobIsKnown;
+		private NativeArray<bool> _jobIsObservedResults;
+		private NativeArray<bool> _jobIsVisibleResults;
 		
-		// Flattened Sensor Arrays
+		// Flattened Sensor Native Arrays
+		private struct SensorEntry
+		{
+			public Entity Owner;
+			public int NativeIndex;
+		}
+		private readonly List<SensorEntry> _sensorEntries = new List<SensorEntry>();
 		private NativeArray<double2> _jobSensorPositions;
 		private NativeArray<float> _jobSensorHeadings;
 		private NativeArray<double> _jobSensorRanges;
 		private NativeArray<float> _jobSensorFOVs;
 		private NativeArray<int> _jobSensorTypes;
 		private NativeArray<float> _jobSensorSensitivities;
-		
-		private NativeArray<bool> _jobIsObservedResults;
-		private NativeArray<bool> _jobIsVisibleResults;
 		
 		private Entity[] _processingEntities = new Entity[0];
 
@@ -85,7 +92,6 @@ namespace GravitasDemo
 
 			// PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateSensors;
 			PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateAutonomies;
-			// PhysicsManager2D.Instance.OnPhysicsUpdated += UpdateNavigations;
 			PhysicsManager2D.Instance.OnSimulationOriginatedBody += EntityCreation.CreateWithExistingBody;
 		}
 
@@ -100,45 +106,83 @@ namespace GravitasDemo
 			{
 				// PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateSensors;
 				PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateAutonomies;
-				// PhysicsManager2D.Instance.OnPhysicsUpdated -= UpdateNavigations;
 				PhysicsManager2D.Instance.OnSimulationOriginatedBody -= EntityCreation.CreateWithExistingBody;
 			}
 		}
 
 		public bool RegisterEntity(Entity entity)
 		{
-			if (entity == null) return false;
+			if (entity == null || _entityLookup.ContainsKey(entity.Name)) return false;
 
-			if (!_allEntities.Contains(entity))
+			if (_isJobRunning) _filterJobHandle.Complete();
+
+			int newIndex = _allEntities.Count;
+			EnsureNativeArrayCapacity(newIndex + 1);
+
+			_allEntities.Add(entity);
+			_processingEntities[newIndex] = entity;
+			_entityLookup.Add(entity.Name, entity);
+			_entityBodyLookup.Add(entity.PhysicsBody, entity);
+
+			// Populate static native properties once upon registration
+			_jobPositions[newIndex] = entity.Position;
+			_jobRadii[newIndex] = entity.Radius;
+			_jobMasses[newIndex] = entity.Mass;
+			_jobIsOwned[newIndex] = entity.IsOwned;
+			_jobIsKnown[newIndex] = entity.IsKnown;
+			_jobIsObservedResults[newIndex] = entity.IsObserved;
+			_jobIsVisibleResults[newIndex] = false;
+
+			if (entity.IsOwned || entity.IsKnown)
 			{
-				_allEntities.Add(entity);
-				_entityLookup.Add(entity.Name, entity);
-				_entityBodyLookup.Add(entity.PhysicsBody, entity);
-
-				if (entity.IsOwned || entity.IsKnown)
-				{
-					_knownEntities.Add(entity);
-				}
-
-				if (entity.HasCapability<NavigationCapability>())
-				{
-					_navigableEntities.Add(entity);
-				}
-				if (entity.HasCapability<SensorCapability>())
-				{
-					_sensorEntities.Add(entity);
-				}
-
-				return true;
+				_knownEntities.Add(entity);
 			}
 
-			return false;
+			if (entity.HasCapability<NavigationCapability>())
+			{
+				_navigableEntities.Add(entity);
+			}
+			if (entity.HasCapability<SensorCapability>())
+			{
+				_sensorEntities.Add(entity);
+				RegisterEntitySensors(entity);
+			}
+
+			return true;
 		}
 
 		public void UnregisterEntity(Entity entity)
 		{
-			if (entity == null) return;
-			_allEntities.Remove(entity);
+			if (entity == null || !_entityLookup.ContainsKey(entity.Name)) return;
+
+			if (_isJobRunning) _filterJobHandle.Complete();
+
+			int index = _allEntities.IndexOf(entity);
+			if (index < 0) return;
+
+			// Unregister associated sensors first
+			UnregisterEntitySensors(entity);
+
+			int lastIndex = _allEntities.Count - 1;
+			if (index < lastIndex)
+			{
+				// Swap-and-pop to maintain dense, contiguous native arrays without gaps
+				Entity lastEntity = _allEntities[lastIndex];
+				_allEntities[index] = lastEntity;
+				_processingEntities[index] = lastEntity;
+
+				_jobPositions[index] = _jobPositions[lastIndex];
+				_jobRadii[index] = _jobRadii[lastIndex];
+				_jobMasses[index] = _jobMasses[lastIndex];
+				_jobIsOwned[index] = _jobIsOwned[lastIndex];
+				_jobIsKnown[index] = _jobIsKnown[lastIndex];
+				_jobIsObservedResults[index] = _jobIsObservedResults[lastIndex];
+				_jobIsVisibleResults[index] = _jobIsVisibleResults[lastIndex];
+			}
+
+			_allEntities.RemoveAt(lastIndex);
+			_processingEntities[lastIndex] = null;
+
 			_knownEntities.Remove(entity);
 			_observedEntities.Remove(entity);
 			_visibleEntities.Remove(entity);
@@ -149,11 +193,64 @@ namespace GravitasDemo
 			_entityLookup.Remove(entity.Name);
 			_entityBodyLookup.Remove(entity.PhysicsBody);
 			
-			if (_activeVisuals.TryGetValue(entity, out var visual))
+			if (_activeVisuals.TryGetValue(entity, out var normalVisual))
 			{
-				visual.Deactivate();
+				normalVisual.Deinitialize();
 				_activeVisuals.Remove(entity);
 			}
+
+			if (_activeCelestialVisuals.TryGetValue(entity, out var celestialVisual))
+			{
+				celestialVisual.Deactivate();
+				_activeCelestialVisuals.Remove(entity);
+			}
+		}
+
+		private void RegisterEntitySensors(Entity entity)
+		{
+			foreach (var sensor in entity.GetCapabilities<SensorCapability>())
+			{
+				int sensorIndex = _sensorEntries.Count;
+				EnsureSensorNativeArrayCapacity(sensorIndex + 1);
+
+				_sensorEntries.Add(new SensorEntry { Owner = entity, NativeIndex = sensorIndex });
+				UpdateSensorDataInNative(sensorIndex, entity, sensor);
+			}
+		}
+
+		private void UnregisterEntitySensors(Entity entity)
+		{
+			for (int i = _sensorEntries.Count - 1; i >= 0; i--)
+			{
+				if (_sensorEntries[i].Owner == entity)
+				{
+					int lastIndex = _sensorEntries.Count - 1;
+					if (i < lastIndex)
+					{
+						// Swap-and-pop for sensor native arrays
+						var lastEntry = _sensorEntries[lastIndex];
+						_sensorEntries[i] = lastEntry;
+
+						_jobSensorPositions[i] = _jobSensorPositions[lastIndex];
+						_jobSensorHeadings[i] = _jobSensorHeadings[lastIndex];
+						_jobSensorRanges[i] = _jobSensorRanges[lastIndex];
+						_jobSensorFOVs[i] = _jobSensorFOVs[lastIndex];
+						_jobSensorTypes[i] = _jobSensorTypes[lastIndex];
+						_jobSensorSensitivities[i] = _jobSensorSensitivities[lastIndex];
+					}
+					_sensorEntries.RemoveAt(lastIndex);
+				}
+			}
+		}
+
+		private void UpdateSensorDataInNative(int nativeIndex, Entity entity, SensorCapability sensor)
+		{
+			_jobSensorPositions[nativeIndex] = entity.Position;
+			_jobSensorHeadings[nativeIndex] = entity.Orientation + sensor.OrientationOffset;
+			_jobSensorRanges[nativeIndex] = sensor.Range;
+			_jobSensorFOVs[nativeIndex] = sensor.FieldOfViewDegrees;
+			_jobSensorTypes[nativeIndex] = (int)sensor.Type;
+			_jobSensorSensitivities[nativeIndex] = sensor.Sensitivity;
 		}
 
 		public void NotifyCapabilityAdded(Entity entity, IEntityCapability capability)
@@ -164,9 +261,10 @@ namespace GravitasDemo
 			{
 				_navigableEntities.Add(entity);
 			}
-			else if (capability is SensorCapability)
+			else if (capability is SensorCapability sensor)
 			{
 				_sensorEntities.Add(entity);
+				RegisterEntitySensors(entity);
 			}
 		}
 
@@ -174,36 +272,56 @@ namespace GravitasDemo
 		{
 			if (entity == null) return;
 
-			if (isAutonomyRunning)
+			if (isAutonomyRunning && _autonomousEntitiesSet.Add(entity))
 			{
-				if (_autonomousEntitiesSet.Add(entity))
-				{
-					_autonomousEntitiesList.Add(entity);
-				}
+				_autonomousEntitiesList.Add(entity);
 			}
-			else
+			else if (_autonomousEntitiesSet.Remove(entity))
 			{
-				if (_autonomousEntitiesSet.Remove(entity))
-				{
-					_autonomousEntitiesList.Remove(entity);
-				}
+				_autonomousEntitiesList.Remove(entity);
 			}
 		}
 
 		public EntityMapObject GetVisualForEntity(Entity entity)
 		{
-			return entity != null && _activeVisuals.TryGetValue(entity, out var bodyVisual) ? bodyVisual : null;
+			// Normal entities only. Celestial entities use GetCelestialVisualForEntity.
+			return entity != null && !entity.IsCelestial &&
+				_activeVisuals.TryGetValue(entity, out var visual) ? visual : null;
+		}
+
+		public CelestialMapObject GetCelestialVisualForEntity(Entity entity)
+		{
+			return entity != null && entity.IsCelestial &&
+				_activeCelestialVisuals.TryGetValue(entity, out var visual) ? visual : null;
+		}
+
+		public MapObject GetMapObjectForEntity(Entity entity)
+		{
+			if (entity == null)
+				return null;
+
+			return entity.IsCelestial
+				? (MapObject)GetCelestialVisualForEntity(entity)
+				: GetVisualForEntity(entity);
 		}
 
 		public void ClearEntities()
 		{
-			_filterJobHandle.Complete();
+			if (_isJobRunning) _filterJobHandle.Complete();
 			_isJobRunning = false;
 			
 			for (int i = _allEntities.Count - 1; i >= 0; i--)
 			{
 				_allEntities[i].RemoveManual();
 			}
+
+			foreach (var visual in _activeVisuals.Values)
+				visual.Deinitialize();
+			_activeVisuals.Clear();
+
+			foreach (var visual in _activeCelestialVisuals.Values)
+				visual.Deactivate();
+			_activeCelestialVisuals.Clear();
 
 			_allEntities.Clear();
 			_knownEntities.Clear();
@@ -215,6 +333,7 @@ namespace GravitasDemo
 			_sensorEntities.Clear();
 			_entityLookup.Clear();
 			_entityBodyLookup.Clear();
+			_sensorEntries.Clear();
 
 			// DisposeNativeArrays();
 		}
@@ -235,18 +354,6 @@ namespace GravitasDemo
 			if (_jobIsObservedResults.IsCreated) _jobIsObservedResults.Dispose();
 			if (_jobIsVisibleResults.IsCreated) _jobIsVisibleResults.Dispose();
 		}
-
-		// private void UpdateNavigations()
-		// {
-		// 	if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _navigableEntities.Count == 0) return;
-		// 	float dt = PhysicsManager2D.Instance.ScaledPhysicsTimeStep;
-
-		// 	foreach (var entity in _navigableEntities)
-		// 	{
-		// 		if (entity == null || entity.IsDestroyed) continue;
-		// 		entity.EvaluateNavigation(dt);
-		// 	}
-		// }
 
 		private void UpdateAutonomies()
 		{
@@ -274,9 +381,8 @@ namespace GravitasDemo
 
 		void LateUpdate()
 		{
-			if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _allEntities == null || _allEntities.Count == 0 || (GameManager.Instance?.IsPaused ?? true)) return;
+			if (PhysicsManager2D.Instance == null || !PhysicsManager2D.Instance.IsInitialized || _allEntities.Count == 0 || (GameManager.Instance?.IsPaused ?? true)) return;
 
-			// Manage async filter cycle
 			if (_isJobRunning)
 			{
 				if (_filterJobHandle.IsCompleted)
@@ -291,71 +397,88 @@ namespace GravitasDemo
 			}
 		}
 
-		private void EnsureNativeArrayCapacities(int entityCount, int sensorCount)
+		private void EnsureNativeArrayCapacity(int requiredCapacity)
 		{
-			if (!_jobPositions.IsCreated || _jobPositions.Length < entityCount)
+			if (!_jobPositions.IsCreated || _jobPositions.Length < requiredCapacity)
 			{
-				DisposeNativeArrays();
-				
-				int paddedCount = Mathf.CeilToInt(entityCount * 1.2f);
-				int paddedSensors = Mathf.Max(32, Mathf.CeilToInt(sensorCount * 1.5f));
-				
-				_jobPositions = new NativeArray<double2>(paddedCount, Allocator.Persistent);
-				_jobRadii = new NativeArray<double>(paddedCount, Allocator.Persistent);
-				_jobMasses = new NativeArray<double>(paddedCount, Allocator.Persistent);
-				_jobIsOwned = new NativeArray<bool>(paddedCount, Allocator.Persistent);
-				_jobIsKnown = new NativeArray<bool>(paddedCount, Allocator.Persistent);
-				
-				_jobSensorPositions = new NativeArray<double2>(paddedSensors, Allocator.Persistent);
-				_jobSensorHeadings = new NativeArray<float>(paddedSensors, Allocator.Persistent);
-				_jobSensorRanges = new NativeArray<double>(paddedSensors, Allocator.Persistent);
-				_jobSensorFOVs = new NativeArray<float>(paddedSensors, Allocator.Persistent);
-				_jobSensorTypes = new NativeArray<int>(paddedSensors, Allocator.Persistent);
-				_jobSensorSensitivities = new NativeArray<float>(paddedSensors, Allocator.Persistent);
-				
-				_jobIsObservedResults = new NativeArray<bool>(paddedCount, Allocator.Persistent);
-				_jobIsVisibleResults = new NativeArray<bool>(paddedCount, Allocator.Persistent);
-				
-				Array.Resize(ref _processingEntities, paddedCount);
-			}
-			else if (_jobSensorPositions.Length < sensorCount)
-			{
-				ResizeSensorArrays(Mathf.CeilToInt(sensorCount * 1.5f));
+				int newCapacity = Mathf.Max(Mathf.CeilToInt(requiredCapacity * 1.3f), 64);
+
+				var newPos = new NativeArray<double2>(newCapacity, Allocator.Persistent);
+				var newRadii = new NativeArray<double>(newCapacity, Allocator.Persistent);
+				var newMasses = new NativeArray<double>(newCapacity, Allocator.Persistent);
+				var newOwned = new NativeArray<bool>(newCapacity, Allocator.Persistent);
+				var newKnown = new NativeArray<bool>(newCapacity, Allocator.Persistent);
+				var newObserved = new NativeArray<bool>(newCapacity, Allocator.Persistent);
+				var newVisible = new NativeArray<bool>(newCapacity, Allocator.Persistent);
+
+				if (_jobPositions.IsCreated)
+				{
+					NativeArray<double2>.Copy(_jobPositions, newPos, _allEntities.Count);
+					NativeArray<double>.Copy(_jobRadii, newRadii, _allEntities.Count);
+					NativeArray<double>.Copy(_jobMasses, newMasses, _allEntities.Count);
+					NativeArray<bool>.Copy(_jobIsOwned, newOwned, _allEntities.Count);
+					NativeArray<bool>.Copy(_jobIsKnown, newKnown, _allEntities.Count);
+					NativeArray<bool>.Copy(_jobIsObservedResults, newObserved, _allEntities.Count);
+					NativeArray<bool>.Copy(_jobIsVisibleResults, newVisible, _allEntities.Count);
+
+					_jobPositions.Dispose();
+					_jobRadii.Dispose();
+					_jobMasses.Dispose();
+					_jobIsOwned.Dispose();
+					_jobIsKnown.Dispose();
+					_jobIsObservedResults.Dispose();
+					_jobIsVisibleResults.Dispose();
+				}
+
+				_jobPositions = newPos;
+				_jobRadii = newRadii;
+				_jobMasses = newMasses;
+				_jobIsOwned = newOwned;
+				_jobIsKnown = newKnown;
+				_jobIsObservedResults = newObserved;
+				_jobIsVisibleResults = newVisible;
+
+				Array.Resize(ref _processingEntities, newCapacity);
 			}
 		}
 
-		private void ResizeSensorArrays(int newCapacity)
+		private void EnsureSensorNativeArrayCapacity(int requiredCapacity)
 		{
-			var newPos = new NativeArray<double2>(newCapacity, Allocator.Persistent);
-			var newHead = new NativeArray<float>(newCapacity, Allocator.Persistent);
-			var newRange = new NativeArray<double>(newCapacity, Allocator.Persistent);
-			var newFOV = new NativeArray<float>(newCapacity, Allocator.Persistent);
-			var newType = new NativeArray<int>(newCapacity, Allocator.Persistent);
-			var newSens = new NativeArray<float>(newCapacity, Allocator.Persistent);
-
-			if (_jobSensorPositions.IsCreated)
+			if (!_jobSensorPositions.IsCreated || _jobSensorPositions.Length < requiredCapacity)
 			{
-				NativeArray<double2>.Copy(_jobSensorPositions, newPos, _jobSensorPositions.Length);
-				NativeArray<float>.Copy(_jobSensorHeadings, newHead, _jobSensorHeadings.Length);
-				NativeArray<double>.Copy(_jobSensorRanges, newRange, _jobSensorRanges.Length);
-				NativeArray<float>.Copy(_jobSensorFOVs, newFOV, _jobSensorFOVs.Length);
-				NativeArray<int>.Copy(_jobSensorTypes, newType, _jobSensorTypes.Length);
-				NativeArray<float>.Copy(_jobSensorSensitivities, newSens, _jobSensorSensitivities.Length);
+				int newCapacity = Mathf.Max(Mathf.CeilToInt(requiredCapacity * 1.3f), 32);
 
-				_jobSensorPositions.Dispose();
-				_jobSensorHeadings.Dispose();
-				_jobSensorRanges.Dispose();
-				_jobSensorFOVs.Dispose();
-				_jobSensorTypes.Dispose();
-				_jobSensorSensitivities.Dispose();
+				var newPos = new NativeArray<double2>(newCapacity, Allocator.Persistent);
+				var newHead = new NativeArray<float>(newCapacity, Allocator.Persistent);
+				var newRange = new NativeArray<double>(newCapacity, Allocator.Persistent);
+				var newFOV = new NativeArray<float>(newCapacity, Allocator.Persistent);
+				var newType = new NativeArray<int>(newCapacity, Allocator.Persistent);
+				var newSens = new NativeArray<float>(newCapacity, Allocator.Persistent);
+
+				if (_jobSensorPositions.IsCreated)
+				{
+					NativeArray<double2>.Copy(_jobSensorPositions, newPos, _sensorEntries.Count);
+					NativeArray<float>.Copy(_jobSensorHeadings, newHead, _sensorEntries.Count);
+					NativeArray<double>.Copy(_jobSensorRanges, newRange, _sensorEntries.Count);
+					NativeArray<float>.Copy(_jobSensorFOVs, newFOV, _sensorEntries.Count);
+					NativeArray<int>.Copy(_jobSensorTypes, newType, _sensorEntries.Count);
+					NativeArray<float>.Copy(_jobSensorSensitivities, newSens, _sensorEntries.Count);
+
+					_jobSensorPositions.Dispose();
+					_jobSensorHeadings.Dispose();
+					_jobSensorRanges.Dispose();
+					_jobSensorFOVs.Dispose();
+					_jobSensorTypes.Dispose();
+					_jobSensorSensitivities.Dispose();
+				}
+
+				_jobSensorPositions = newPos;
+				_jobSensorHeadings = newHead;
+				_jobSensorRanges = newRange;
+				_jobSensorFOVs = newFOV;
+				_jobSensorTypes = newType;
+				_jobSensorSensitivities = newSens;
 			}
-
-			_jobSensorPositions = newPos;
-			_jobSensorHeadings = newHead;
-			_jobSensorRanges = newRange;
-			_jobSensorFOVs = newFOV;
-			_jobSensorTypes = newType;
-			_jobSensorSensitivities = newSens;
 		}
 		
 		private void ScheduleFilterJob()
@@ -363,44 +486,28 @@ namespace GravitasDemo
 			int entityCount = _allEntities.Count;
 			if (entityCount == 0 || SimulationRenderer.Instance == null) return;
 
-			// Snapshot the count at schedule time
-			_scheduledEntityCount = entityCount;
-
-			// Increment time-slice index to distribute sensor checks across multiple frames
+			// Advance time-slice index
 			_currentFrameSlice = (_currentFrameSlice + 1) % TimeSliceCount;
 
-			// Count total active sensors
-			int totalSensors = 0;
-			foreach (var entity in _sensorEntities)
+			// Synchronize dynamic position, known status, mass, and radius every frame to prevent stale state bugs
+			for (int i = 0; i < entityCount; i++)
 			{
-				totalSensors += entity.NumSensors;
+				var entity = _allEntities[i];
+				_jobPositions[i] = entity.Position;
+				_jobIsKnown[i] = entity.IsKnown;
+				_jobMasses[i] = entity.Mass;
+				_jobRadii[i] = entity.Radius;
 			}
 
-			EnsureNativeArrayCapacities(entityCount, totalSensors);
-
-			int sensorIndex = 0;
-			for (int i = 0; i < entityCount; i++) // Terrible
+			for (int i = 0; i < _sensorEntries.Count; i++)
 			{
-				Entity entity = _allEntities[i];
-				_processingEntities[i] = entity;
-				_jobPositions[i] = entity.Position;
-				_jobRadii[i] = entity.Radius;
-				_jobMasses[i] = entity.Mass;
-				_jobIsOwned[i] = entity.IsOwned;
-				_jobIsKnown[i] = entity.IsKnown;
-
-				if (entity.IsOwned)
+				var entry = _sensorEntries[i];
+				foreach (var sensor in entry.Owner.GetCapabilities<SensorCapability>())
 				{
-					foreach (var sensor in entity.GetCapabilities<SensorCapability>())
-					{
-						_jobSensorPositions[sensorIndex] = entity.Position;
-						_jobSensorHeadings[sensorIndex] = entity.Orientation + sensor.OrientationOffset;
-						_jobSensorRanges[sensorIndex] = sensor.Range;
-						_jobSensorFOVs[sensorIndex] = sensor.FieldOfViewDegrees;
-						_jobSensorTypes[sensorIndex] = (int)sensor.Type;
-						_jobSensorSensitivities[sensorIndex] = sensor.Sensitivity;
-						sensorIndex++;
-					}
+					// Update live sensor transforms
+					_jobSensorPositions[i] = entry.Owner.Position;
+					_jobSensorHeadings[i] = entry.Owner.Orientation + sensor.OrientationOffset;
+					break; // Assuming one sensor per entry mapping
 				}
 			}
 
@@ -414,12 +521,12 @@ namespace GravitasDemo
 				Masses = _jobMasses,
 				IsOwned = _jobIsOwned,
 				IsKnown = _jobIsKnown,
-				SensorPositions = _jobSensorPositions.GetSubArray(0, sensorIndex),
-				SensorHeadings = _jobSensorHeadings.GetSubArray(0, sensorIndex),
-				SensorRanges = _jobSensorRanges.GetSubArray(0, sensorIndex),
-				SensorFOVs = _jobSensorFOVs.GetSubArray(0, sensorIndex),
-				SensorTypes = _jobSensorTypes.GetSubArray(0, sensorIndex),
-				SensorSensitivities = _jobSensorSensitivities.GetSubArray(0, sensorIndex),
+				SensorPositions = _jobSensorPositions.GetSubArray(0, _sensorEntries.Count),
+				SensorHeadings = _jobSensorHeadings.GetSubArray(0, _sensorEntries.Count),
+				SensorRanges = _jobSensorRanges.GetSubArray(0, _sensorEntries.Count),
+				SensorFOVs = _jobSensorFOVs.GetSubArray(0, _sensorEntries.Count),
+				SensorTypes = _jobSensorTypes.GetSubArray(0, _sensorEntries.Count),
+				SensorSensitivities = _jobSensorSensitivities.GetSubArray(0, _sensorEntries.Count),
 				BufferedBounds = bufferedBounds,
 				CurrentFrameSlice = _currentFrameSlice,
 				TimeSliceCount = TimeSliceCount,
@@ -440,9 +547,9 @@ namespace GravitasDemo
 			_visibleEntities.Clear();
 			_entitiesToRemove.Clear();
 
-			int count = _scheduledEntityCount;
+			int count = _allEntities.Count;
 
-			// Gather all entities currently involved in interactions that must remain rendered
+			// Gather protected entities from interaction controller
 			HashSet<Entity> protectedEntities = new HashSet<Entity>();
 			var interactionController = SimulationInteractionController.Instance;
 			if (interactionController != null)
@@ -452,21 +559,21 @@ namespace GravitasDemo
 				
 				foreach (var mapObj in interactionController.SelectedMapObjects)
 				{
-					if (mapObj is EntityMapObject ego && ego.Entity != null) protectedEntities.Add(ego.Entity);
+					if (mapObj != null && mapObj.Entity != null)
+						protectedEntities.Add(mapObj.Entity);
 				}
 				foreach (var mapObj in interactionController.PinnedMapObjects)
 				{
-					if (mapObj is EntityMapObject ego && ego.Entity != null) protectedEntities.Add(ego.Entity);
+					if (mapObj != null && mapObj.Entity != null)
+						protectedEntities.Add(mapObj.Entity);
 				}
 			}
 
-			// 1. Single pass to evaluate job results and map to discrete collections
+			// Process results directly via array references without any .Contains() overhead
 			for (int i = 0; i < count; i++)
 			{
 				Entity entity = _processingEntities[i];
-
-				// Safeguard against null entries or entities unregistered during the job cycle
-				if (entity == null || !_allEntities.Contains(entity)) continue;
+				if (entity == null) continue;
 				
 				// if (_jobIsObservedResults[i])
 				// {
@@ -481,7 +588,6 @@ namespace GravitasDemo
 				// 	entity.MarkUnobserved();
 				// }
 				
-				// Only process observation updates for entities evaluated in the current time-slice
 				if (i % TimeSliceCount == _currentFrameSlice)
 				{
 					if (_jobIsObservedResults[i])
@@ -502,40 +608,68 @@ namespace GravitasDemo
 				{
 					_visibleEntities.Add(entity);
 
-					// Instantiate and map visual proxy directly from the rendering pool
-					if (!_activeVisuals.ContainsKey(entity))
+					if (entity.IsCelestial)
 					{
-						EntityMapObject newVisual = SimulationRenderer.Instance.GetEntityFromPool(entity);
-						if (newVisual != null) _activeVisuals.Add(entity, newVisual);
+						// Celestials retain individual UI Graphics and unique material instances.
+						if (!_activeCelestialVisuals.ContainsKey(entity))
+						{
+							CelestialMapObject celestialVisual = SimulationRenderer.Instance.GetCelestialVisualFromPool(entity);
+							if (celestialVisual != null)
+								_activeCelestialVisuals.Add(entity, celestialVisual);
+						}
+
+						// Defensive cleanup if an entity's classification ever changes.
+						if (_activeVisuals.TryGetValue(entity, out var staleNormalVisual))
+						{
+							staleNormalVisual.Deinitialize();
+							_activeVisuals.Remove(entity);
+						}
+					}
+					else
+					{
+						// Pure managed data allocation: no Instantiate, Transform, RectTransform, or GameObject.
+						if (!_activeVisuals.ContainsKey(entity))
+						{
+							EntityMapObject newVisual = new EntityMapObject();
+							newVisual.InitializeBody(entity);
+							_activeVisuals.Add(entity, newVisual);
+						}
+
+						if (_activeCelestialVisuals.TryGetValue(entity, out var staleCelestialVisual))
+						{
+							staleCelestialVisual.Deactivate();
+							_activeCelestialVisuals.Remove(entity);
+						}
 					}
 				}
 			}
 
-			// 2. Diff against active visual dictionary to target off-screen or undetected bodies
+			_entitiesToRemove.Clear();
 			foreach (var kvp in _activeVisuals)
 			{
 				if (!_visibleEntities.Contains(kvp.Key))
-				{
 					_entitiesToRemove.Add(kvp.Key);
-				}
+			}
+			foreach (var kvp in _activeCelestialVisuals)
+			{
+				if (!_visibleEntities.Contains(kvp.Key) && !_entitiesToRemove.Contains(kvp.Key))
+					_entitiesToRemove.Add(kvp.Key);
 			}
 
-			// 3. Deactivate flagged bodies securely
 			foreach (var entity in _entitiesToRemove)
 			{
-				try
+				if (_activeVisuals.TryGetValue(entity, out var normalVisual))
 				{
-					_activeVisuals[entity].Deactivate();
+					normalVisual.Deinitialize();
 					_activeVisuals.Remove(entity);
 				}
-				catch (Exception ex)
+
+				if (_activeCelestialVisuals.TryGetValue(entity, out var celestialVisual))
 				{
-					Debug.LogError($"[{GetType().Name}] Error removing visual for entity: {ex.Message}");
+					celestialVisual.Deactivate();
+					_activeCelestialVisuals.Remove(entity);
 				}
 			}
-
-			// 4. Release object references to prevent GC leaks on destroyed entities
-			Array.Clear(_processingEntities, 0, count);
 		}
 	}
 
@@ -609,7 +743,6 @@ namespace GravitasDemo
 					}
 
 					// Evaluate Distance Fall-off & Detection Strength by Sensor Type
-					double dist = math.sqrt(distSq);
 					int sensorType = SensorTypes[i];
 					float sensitivity = SensorSensitivities[i];
 					double detectionScore = 0.0;

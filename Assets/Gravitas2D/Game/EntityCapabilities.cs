@@ -57,6 +57,8 @@ namespace GravitasDemo
 		public float MaxForce { get; set; } = 10000f; // Newtons
 		public bool IsNavigating { get; set; } = false;
 		public float ArrivalThreshold { get; set; } = 10.0f; // Meters
+		public float RendezvousVelocityThreshold { get; set; } = 0.25f; // m/s relative speed required for capture
+		public bool RendezvousSolutionFailed { get; private set; }
 		public bool IsRendezvousMode { get; set; } = false; // Toggle between Intercept and Rendezvous
 		public bool IsStationKeepingMode { get; set; } = false; // Toggle for relative position hold / station-keeping
 		public bool IsOrbitMatchMode { get; set; } = false; // Toggle for matching a reference orbit
@@ -118,6 +120,8 @@ namespace GravitasDemo
 		public double2 TargetOrbitVelocity { get; set; }
 
 		public float BurnOrientation { get; private set; }
+		/// <summary>Requested thrust fraction for rendezvous guidance, in [0, 1].</summary>
+		public float BurnThrottle { get; private set; } = 1f;
 
 		// Desired velocity correction for the active orbit-match guidance update.
 		// Translational thrust is scaled from this error so it tapers smoothly at capture.
@@ -135,9 +139,17 @@ namespace GravitasDemo
 		// Rendezvous Clearance
 		public float ClearanceDistance { get; set; } = 1000;
 
-		private float _lastFlightTime = -1f;
+		private float _lastFlightTime = -1f;		
+		private readonly RendezvousGuidanceSolver.PlanMemory _rendezvousPlanMemory = new RendezvousGuidanceSolver.PlanMemory();
+		private Entity _rendezvousOffsetTarget;
+		private double2 _rendezvousOffsetDirection;
+		private bool _hasRendezvousOffsetDirection;
 
 		public float TimeOfFlight { get; private set; }
+		public double LastRendezvousSolveMilliseconds => _rendezvousPlanMemory.LastSolveMilliseconds;
+		public int LastRendezvousTerminalEvaluations => _rendezvousPlanMemory.LastTerminalEvaluationCount;
+		public int LastRendezvousIntegrationSteps => _rendezvousPlanMemory.LastVehicleIntegrationStepCount;
+		public int LastRendezvousGravitySegments => _rendezvousPlanMemory.LastGravityEphemerisSegmentCount;
 
 		public static NavigationCapability Missile => new NavigationCapability
 		{
@@ -161,6 +173,8 @@ namespace GravitasDemo
 			IsEnabled = false;
 			TargetOrientation = OwnerEntity.Orientation;
 			BurnOrientation = 0;
+			BurnThrottle = 0f;
+			RendezvousSolutionFailed = false;
 			_targetAngularVelocity = 0f;
 			_targetAngularAcceleration = 0f;
 			_hasTargetOrientationSample = false;
@@ -168,6 +182,10 @@ namespace GravitasDemo
 			TargetOrbitPositionOffset = double2.zero;
 			TargetOrbitVelocity = double2.zero;
 			RequiredOrbitMatchDeltaV = 0;
+			_rendezvousOffsetTarget = null;
+			_rendezvousOffsetDirection = double2.zero;
+			_hasRendezvousOffsetDirection = false;
+			_rendezvousPlanMemory.Reset();
 		}
 
 		/// <summary>
@@ -427,28 +445,41 @@ namespace GravitasDemo
 				double targetRadius = TargetEntity.Radius;
 				double targetClearance = TargetEntity.IsCelestial ? targetRadius * 0.1 : ClearanceDistance;
 
+				// Choose the standoff side once per rendezvous. Recomputing the direction from
+				// instantaneous target velocity every frame makes the aim point orbit around the
+				// target, while its velocity was still reported as the target centre velocity.
+				// A fixed inertial offset gives the solver a consistent moving terminal point.
+				if (!_hasRendezvousOffsetDirection || _rendezvousOffsetTarget != TargetEntity)
+				{
+					double2 approachDirection;
+					if (OwnerEntity.InGroup && OwnerEntity.Group.Leader != null)
+						approachDirection = OwnerEntity.Group.Leader.Position - TargetEntity.Position;
+					else if (math.lengthsq(TargetEntity.Velocity) > 1e-12)
+						approachDirection = -TargetEntity.Velocity;
+					else
+						approachDirection = OwnerEntity.Position - TargetEntity.Position;
+
+					_rendezvousOffsetDirection = math.lengthsq(approachDirection) > 1e-12
+						? math.normalize(approachDirection)
+						: new double2(1.0, 0.0);
+					_rendezvousOffsetTarget = TargetEntity;
+					_hasRendezvousOffsetDirection = true;
+				}
+
+				double approachBodyRadius = OwnerEntity.InGroup && OwnerEntity.Group.Leader != null
+					? OwnerEntity.Group.Leader.Radius
+					: OwnerEntity.Radius;
+				double separation = targetRadius + approachBodyRadius + targetClearance;
+				TargetPosition = TargetEntity.Position + separation * _rendezvousOffsetDirection;
+
 				if (OwnerEntity.InGroup)
-				{
-					double2 groupRelPos = OwnerEntity.Group.GetFormationPosition(OwnerEntity);
-
-					Entity leader = OwnerEntity.Group.Leader;
-					double separation = targetRadius + leader.Radius + targetClearance;
-					double2 normal = math.normalize(leader.Position - TargetEntity.Position);
-
-					TargetPosition = TargetEntity.Position + separation * normal + groupRelPos;
-				}
-				else
-				{
-					double separation = targetRadius + OwnerEntity.Radius + targetClearance;
-					// double2 normal = math.normalize(OwnerEntity.Position - TargetEntity.Position);
-					double2 normal = -math.normalize(TargetEntity.Velocity);
-
-					TargetPosition = TargetEntity.Position + separation * normal;
-				}
+					TargetPosition += OwnerEntity.Group.GetFormationPosition(OwnerEntity);
 			}
 			else
 			{
 				TargetPosition = TargetEntity.Position;
+				_rendezvousOffsetTarget = null;
+				_hasRendezvousOffsetDirection = false;
 			}
 
 			TargetVelocity = TargetEntity.Velocity;
@@ -650,81 +681,79 @@ namespace GravitasDemo
 			return t;
 		}
 
-		public bool ComputeRendezvousTrajectory()
+		public bool ComputeRendezvousTrajectory(float controlDeltaTime = 0.02f)
 		{
-			BurnOrientation = 0f;
-			
-			double mass = OwnerEntity.Mass;
-			double2 currentPos = OwnerEntity.Position;
-			double2 currentVel = OwnerEntity.Velocity;
-
-			if (mass <= 0.0) return false;
+			BurnThrottle = 0f;
+			RendezvousSolutionFailed = false;
+			if (OwnerEntity == null || OwnerEntity.IsDestroyed || OwnerEntity.PhysicsBody == null || OwnerEntity.Mass <= 0.0)
+			{
+				RendezvousSolutionFailed = true;
+				return false;
+			}
 
 			UpdateTargetState();
+			if (!IsFinite(TargetPosition.x) || !IsFinite(TargetPosition.y) ||
+				!IsFinite(TargetVelocity.x) || !IsFinite(TargetVelocity.y))
+			{
+				RendezvousSolutionFailed = true;
+				return false;
+			}
 
-			if (double.IsNaN(TargetPosition.x) || double.IsNaN(TargetPosition.y)) return false;
+			double2 relativePosition = TargetPosition - OwnerEntity.Position;
+			double2 relativeVelocity = TargetVelocity - OwnerEntity.Velocity;
+			double distance = math.length(relativePosition);
+			double relativeSpeed = math.length(relativeVelocity);
 
-			double2 R = TargetPosition - currentPos;
-			double2 V = TargetVelocity - currentVel;
-			double distance = math.length(R);
-			double relSpeed = math.length(currentVel - TargetVelocity);
-
-			if (distance <= ArrivalThreshold && relSpeed < 1.0)
+			// Capture is a terminal-state condition, not merely a distance crossing. This prevents
+			// the controller from declaring success while carrying substantial closing velocity.
+			if (distance <= ArrivalThreshold && relativeSpeed <= RendezvousVelocityThreshold)
 			{
 				TimeOfFlight = 0f;
 				return false;
 			}
 
-			float acceleration = (float)(MaxForce / mass);
-			if (acceleration <= 0f || float.IsNaN(acceleration)) return false;
-
-			PhysicsBody parentSoI = OwnerEntity.DominantEntity?.PhysicsBody ?? null;
-			double mu = OwnerEntity.PhysicsBody != null ? OwnerEntity.PhysicsBody.GravParam : 0.0;
-
-			// Compute and save to TimeOfFlight using the robust kinematic solver
-			TimeOfFlight = ComputeRendezvousTimeOfFlight(currentPos, currentVel, TargetPosition, TargetVelocity, mass, MaxForce, mu, parentSoI, ArrivalThreshold);
-
-			float tgo = TimeOfFlight;
-			if (float.IsNaN(tgo) || float.IsInfinity(tgo) || tgo <= 0.05f) tgo = 0.05f;
-
-			// Compute local gravitational acceleration
-			double2 gravityAcc = double2.zero;
-			if (parentSoI != null)
+			if (MaxForce <= 0f || OwnerEntity.Mass <= 0.0)
 			{
-				double2 rVec = currentPos - parentSoI.Position;
-				double rDist = math.length(rVec);
-				if (rDist > 1.0)
-				{
-					gravityAcc = -mu * rVec / (rDist * rDist * rDist);
-				}
+				RendezvousSolutionFailed = true;
+				return false;
 			}
 
-			// Gravity-compensated Zero Effort Miss (ZEM)
-			double2 ZEM = R + (V * tgo) + (0.5 * gravityAcc * tgo * tgo);
-
-			// Constant-acceleration ZEM/ZEV guidance law
-			double2 requiredVelChange = (6.0 * ZEM / (tgo * tgo)) - (4.0 * V / tgo);
-
-			double len = math.length(requiredVelChange);
-			if (len > 1e-5 && !double.IsNaN(len) && !double.IsInfinity(len))
+			if (!RendezvousGuidanceSolver.TrySolve(
+				OwnerEntity,
+				TargetEntity,
+				TargetPosition,
+				TargetVelocity,
+				MaxForce,
+				ArrivalThreshold,
+				RendezvousVelocityThreshold,
+				controlDeltaTime,
+				TimeOfFlight,
+				out double2 commandedAcceleration,
+				out float solvedTimeOfFlight,
+				planMemory: _rendezvousPlanMemory))
 			{
-				double2 burnDir = requiredVelChange / len;
-				if (!double.IsNaN(burnDir.x) && !double.IsNaN(burnDir.y))
-				{
-					BurnOrientation = math.atan2((float)burnDir.y, (float)burnDir.x);
-					return true;
-				}
+				RendezvousSolutionFailed = true;
+				return false;
 			}
 
-			if (distance > 1e-5)
+			TimeOfFlight = solvedTimeOfFlight;
+			double requestedAcceleration = math.length(commandedAcceleration);
+			double maximumAcceleration = MaxForce / OwnerEntity.Mass;
+			if (!IsFinite(requestedAcceleration) || requestedAcceleration <= 1e-10 || maximumAcceleration <= 0.0)
 			{
-				double2 burnDir = R / distance;
-				BurnOrientation = math.atan2((float)burnDir.y, (float)burnDir.x);
+				// A zero-thrust first interval is a valid MPC decision (coast before a later burn).
+				// Keep the current attitude; the next navigation tick replans from the new state.
+				BurnOrientation = OwnerEntity.Orientation;
+				BurnThrottle = 0f;
 				return true;
 			}
 
-			return false;
+			BurnOrientation = math.atan2((float)commandedAcceleration.y, (float)commandedAcceleration.x);
+			BurnThrottle = math.clamp((float)(requestedAcceleration / maximumAcceleration), 0f, 1f);
+			return true;
 		}
+
+		private static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 
 		/// <summary>
 		/// Computes the trajectory adjustment for relative position hold (station-keeping) relative to the target entity or position.
@@ -950,103 +979,41 @@ namespace GravitasDemo
 		public List<double2> PredictRendezvousPath(double maxTime = -1.0, int steps = 150)
 		{
 			List<double2> path = new List<double2>();
-			if (OwnerEntity == null || OwnerEntity.IsDestroyed || OwnerEntity.Mass <= 0.0) return path;
+			if (OwnerEntity == null || OwnerEntity.IsDestroyed || OwnerEntity.PhysicsBody == null ||
+				OwnerEntity.Mass <= 0.0 || MaxForce <= 0f ||
+				(TargetEntity != null && TargetEntity.IsDestroyed))
+				return path;
 
-			double2 pos = OwnerEntity.Position;
-			double2 vel = OwnerEntity.Velocity;
-			double mass = OwnerEntity.Mass;
-			float acceleration = MaxForce / (float)mass;
+			UpdateTargetState();
+			if (!IsFinite(TargetPosition.x) || !IsFinite(TargetPosition.y) ||
+				!IsFinite(TargetVelocity.x) || !IsFinite(TargetVelocity.y))
+				return path;
 
-			double effectiveMaxTime = (maxTime > 0.0) ? maxTime : (TimeOfFlight > 0f ? TimeOfFlight : 3600.0);
-			double dt = effectiveMaxTime / steps;
-			path.Add(pos);
+			PhysicsManager2D manager = PhysicsManager2D.Instance;
+			double controlStep = manager != null && manager.IsInitialized && manager.ScaledPhysicsTimeStep > 0f
+				? manager.ScaledPhysicsTimeStep
+				: math.max(0.0001f, Time.fixedDeltaTime);
+			double predictionLimit = maxTime > 0.0 ? maxTime : 7.0 * 24.0 * 60.0 * 60.0;
+			double preferredTime = TimeOfFlight > 0f ? TimeOfFlight : -1.0;
 
-			PhysicsBody parentSoI = OwnerEntity.DominantEntity?.PhysicsBody ?? null;
-			double mu = OwnerEntity.PhysicsBody != null ? OwnerEntity.PhysicsBody.GravParam : 0.0;
-
-			double2 targetPos = TargetPosition;
-			double2 targetVel = TargetVelocity;
-
-			for (int i = 0; i < steps; i++)
-			{
-				double2 R = targetPos - pos;
-				double2 V = targetVel - vel;
-				double distance = math.length(R);
-
-				if (distance <= 2000)
-				{
-					break;
-				}
-
-				// Re-evaluate active rendezvous guidance vector at current simulated state
-				double2 requiredVelChange;
-				if (distance < 1500.0)
-				{
-					double alpha = math.min(0.1, 0.02 + (distance / 1500.0) * 0.03);
-					double2 desiredRelVel = R * alpha;
-					double2 actualRelVel = vel - targetVel;
-					requiredVelChange = -(actualRelVel - desiredRelVel);
-				}
-				else
-				{
-					double closingSpeed = math.dot(R, -V) / math.max(1.0, distance);
-					float tgo = (float)math.max(0.05, effectiveMaxTime - (i * dt));
-					if (float.IsNaN(tgo) || float.IsInfinity(tgo) || tgo <= 0.05f) tgo = 1.0f;
-
-					double2 ZEM = R + (V * tgo);
-					requiredVelChange = (6.0 * ZEM / (tgo * tgo)) - (4.0 * V / tgo);
-				}
-
-				double2 burnDir = double2.zero;
-				double len = math.length(requiredVelChange);
-				if (len > 1e-5 && !double.IsNaN(len) && !double.IsInfinity(len))
-				{
-					burnDir = requiredVelChange / len;
-				}
-				else if (distance > 1e-5)
-				{
-					burnDir = R / distance;
-				}
-
-				// 1. Compute thrust acceleration vector
-				double2 thrustAcc = burnDir * acceleration;
-
-				// 2. Compute gravitational acceleration for vehicle
-				double2 gravityAcc = double2.zero;
-				if (parentSoI != null)
-				{
-					double2 rVec = pos - parentSoI.Position;
-					double rDist = math.length(rVec);
-					if (rDist > 1.0)
-					{
-						gravityAcc = -mu * rVec / (rDist * rDist * rDist);
-					}
-				}
-
-				double2 totalAcc = thrustAcc + gravityAcc;
-
-				// 3. Integration step for vehicle
-				vel += totalAcc * dt;
-				pos += vel * dt;
-
-				// Propagate target position and velocity forward
-				double2 targetGravityAcc = double2.zero;
-				if (parentSoI != null)
-				{
-					double2 rVecTarget = targetPos - parentSoI.Position;
-					double rDistTarget = math.length(rVecTarget);
-					if (rDistTarget > 1.0)
-					{
-						targetGravityAcc = -mu * rVecTarget / (rDistTarget * rDistTarget * rDistTarget);
-					}
-				}
-				targetVel += targetGravityAcc * dt;
-				targetPos += targetVel * dt;
-
-				path.Add(pos);
-			}
+			RendezvousGuidanceSolver.TrySolve(
+				OwnerEntity,
+				TargetEntity,
+				TargetPosition,
+				TargetVelocity,
+				MaxForce,
+				ArrivalThreshold,
+				RendezvousVelocityThreshold,
+				controlStep,
+				preferredTime,
+				out _,
+				out _,
+				path,
+				math.max(1, steps),
+				predictionLimit);
 
 			return path;
 		}
+
 	}
 }

@@ -1,60 +1,51 @@
-using GravitasDemo.Interaction;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace GravitasDemo.Rendering
 {
-	public class CircularRaycastTarget : Graphic
+	/// <summary>
+	/// Circular interaction geometry shared by data-only entity map objects and the few
+	/// GameObject-backed map objects. It is no longer a Graphic and is not registered with
+	/// the Unity UI EventSystem; SimulationInteractionController invokes it directly.
+	/// </summary>
+	[DisallowMultipleComponent]
+	public sealed class CircularRaycastTarget : MonoBehaviour
 	{
-		private EntityMapObject _entityMapObject;
-		private EntityGroupMapObject _groupMapObject;
-
-		protected override void Awake()
+		public bool Raycast(MapObject mapObject, Vector2 localUIPosition, float hoverMarginPixels)
 		{
-			base.Awake();
-			raycastTarget = true;
-			_entityMapObject = GetComponent<EntityMapObject>();
-			_groupMapObject = GetComponent<EntityGroupMapObject>();
-		}
-
-		// Disable rendering/drawing since this is purely a raycast target
-		public override void Rebuild(CanvasUpdate update) { }
-		public override Texture mainTexture => null;
-		protected override void OnPopulateMesh(VertexHelper vh) { vh.Clear(); }
-
-		public override bool Raycast(Vector2 sp, Camera eventCamera)
-		{
-			if (!isActiveAndEnabled) return false;
-
-			Vector2 localPoint;
-			if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, sp, eventCamera, out localPoint))
+			if (!isActiveAndEnabled || !IsAlive(mapObject))
 				return false;
 
-			// Retrieve hover margin dynamically
-			float hoverMarginPixels = 10f;
-			if (SimulationRenderer.Instance != null && SimulationRenderer.Instance.VisualizationArea != null)
-			{
-				float pct = SimulationInteractionController.Instance != null 
-					? SimulationInteractionController.Instance.HoverMarginScreenPct 
-					: 0.01f;
-				hoverMarginPixels = SimulationRenderer.Instance.VisualizationArea.rect.width * pct;
-			}
+			return IsHit(mapObject, localUIPosition, hoverMarginPixels);
+		}
 
-			// Since sizeDelta now encompasses (visualSize + margin * 2), 
-			// baseRadius is derived by subtracting the margin from the half-size.
-			float halfSize = rectTransform.sizeDelta.x * 0.5f;
-			float baseRadius = Mathf.Max(0f, halfSize - hoverMarginPixels);
+		public static bool IsAlive(MapObject mapObject)
+		{
+			if (ReferenceEquals(mapObject, null))
+				return false;
 
-			// Account for celestial atmospheric scale multiplier (2.6f vs 2.0f) 
-			if (_entityMapObject != null && _entityMapObject.Entity != null && _entityMapObject.Entity.IsCelestial)
-			{
-				baseRadius *= (2.0f / 2.6f);
-			}
+			// Interface references do not use UnityEngine.Object's overloaded null operator.
+			if (mapObject is Object unityObject && unityObject == null)
+				return false;
 
-			float totalHitRadius = baseRadius + hoverMarginPixels;
-			
-			// Strict circular radius check including hover margin
-			return localPoint.sqrMagnitude <= (totalHitRadius * totalHitRadius);
+			return mapObject.IsVisualActive && !mapObject.IsDestroyed;
+		}
+
+		public static bool IsHit(MapObject mapObject, Vector2 localUIPosition, float hoverMarginPixels)
+		{
+			if (!IsAlive(mapObject) || mapObject.PixelDiameter <= 0f)
+				return false;
+
+			// PixelDiameter is the visible diameter and deliberately excludes the interaction
+			// margin. This reproduces the previous Graphic's effective radius calculation.
+			float visualRadius = mapObject.PixelDiameter * 0.5f;
+
+			// Celestial graphics are rendered at 2.6x physical radius while their selectable
+			// physical radius uses the 2.0x scale, preserving the former hitbox correction.
+			if (mapObject.IsCelestial)
+				visualRadius *= (2.0f / 2.6f);
+
+			float hitRadius = Mathf.Max(0f, visualRadius + Mathf.Max(0f, hoverMarginPixels));
+			return (localUIPosition - mapObject.ViewPosition).sqrMagnitude <= hitRadius * hitRadius;
 		}
 	}
 }

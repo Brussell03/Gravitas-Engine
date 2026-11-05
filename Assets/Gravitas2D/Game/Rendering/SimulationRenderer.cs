@@ -3,11 +3,14 @@ using System.Collections.Generic;
 using Gravitas2D;
 using GravitasDemo.Interaction;
 using TMPro;
+using Unity.Burst;
 using Unity.Collections;
+using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.Pool;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace GravitasDemo.Rendering
@@ -21,7 +24,7 @@ namespace GravitasDemo.Rendering
 		[SerializeField] private RectTransform _visualizationArea;
 		[SerializeField] private RectTransform _bodiesContainer;
 		[SerializeField] private RectTransform _trajectoriesContainer;
-		[SerializeField] private EntityMapObject _entityPrefab;
+		[SerializeField] private CelestialMapObject _celestialPrefab;
 		[SerializeField] private EntityGroupMapObject _groupPrefab;
 		[SerializeField] private TextMeshProUGUI _simTimeText;
 		[SerializeField] private List<Sprite> _bodyImageTypes;
@@ -47,11 +50,73 @@ namespace GravitasDemo.Rendering
 		private PointerEventData _pointerEventData;
 		private List<RaycastResult> _raycastResults = new List<RaycastResult>(10);
 
+		private NativeArray<double2> _transformPositions;
+		private NativeArray<float> _transformRotations;
+		private NativeArray<bool> _transformIsCelestial;
+		private NativeArray<double> _transformRadii;
+		private NativeArray<float> _transformOutPosX;
+		private NativeArray<float> _transformOutPosY;
+		private NativeArray<float> _transformOutScale;
+		private NativeArray<float> _transformOutRot;
+		private List<MapObject> _cachedVisualsBuffer = new List<MapObject>(1024);
+
+		[Header("GPU Map Rendering")]
+		[SerializeField] private Material _mapObjectInstancedMaterial;
+		[SerializeField] private Material _selectionRingInstancedMaterial;
+		[SerializeField] private Color _selectionRingColor = new Color(1f, 0.85f, 0.2f, 0.95f);
+		[SerializeField, Min(0f)] private float _selectionRingPaddingPixels = 4f;
+		[SerializeField, Range(0.005f, 0.15f)] private float _selectionRingThickness = 0.035f;
+		[SerializeField, Range(0, 31)] private int _mapRenderLayer = 0;
+		[SerializeField, Min(1)] private int _renderTextureResolutionScale = 1;
+
+		// With the default object-to-world + world-to-object instance data, Unity limits
+		// matrix-array instancing to 511 instances per draw.
+		private const int MaxInstancesPerDraw = 511;
+		private static readonly int MainTexID = Shader.PropertyToID("_MainTex");
+		private static readonly int InstanceColorID = Shader.PropertyToID("_InstanceColor");
+
+		private sealed class SpriteBatch
+		{
+			public Sprite Sprite;
+			public Mesh Mesh;
+			public readonly Matrix4x4[] Matrices = new Matrix4x4[MaxInstancesPerDraw];
+			public readonly Vector4[] Colors = new Vector4[MaxInstancesPerDraw];
+			public readonly MaterialPropertyBlock Properties = new MaterialPropertyBlock();
+			public int Count;
+		}
+
+		private readonly Dictionary<Sprite, SpriteBatch> _spriteBatches = new Dictionary<Sprite, SpriteBatch>();
+		private readonly List<SpriteBatch> _activeSpriteBatches = new List<SpriteBatch>(32);
+		private readonly HashSet<SpriteBatch> _activeSpriteBatchSet = new HashSet<SpriteBatch>();
+		private readonly Dictionary<Sprite, Mesh> _spriteMeshCache = new Dictionary<Sprite, Mesh>();
+		private RectTransform _mapObjectUIContainer;
+		private Camera _mapRenderCamera;
+		private GameObject _mapRenderCameraObject;
+		private RawImage _mapRenderImage;
+		private RenderTexture _mapRenderTexture;
+		private Mesh _unitQuadMesh;
+		private bool _ownsMapObjectMaterial;
+		private bool _ownsSelectionRingMaterial;
+		private bool _instancingSupported;
+		private readonly Matrix4x4[] _selectionRingMatrices = new Matrix4x4[MaxInstancesPerDraw];
+		private readonly Vector4[] _selectionRingColors = new Vector4[MaxInstancesPerDraw];	
+		private MaterialPropertyBlock _selectionRingProperties;
+
 		public RectTransform VisualizationArea => _visualizationArea;
 		public Bounds2D ViewBounds => _cachedBounds;
 		public float BoundsBufferPercentage => _boundsBufferPercentage;
 		public Sprite GetBodyImage(EntityType type) => _bodyImageTypes[(int)type];
 		public Material PlanetShaderMaterial => _planetShaderMaterial;
+		public IReadOnlyList<MapObject> VisibleMapObjects => _cachedVisualsBuffer;
+
+		public float GetHoverMarginPixels()
+		{
+			float width = _visualizationArea != null ? _visualizationArea.rect.width : 0f;
+			float pct = SimulationInteractionController.Instance != null
+				? SimulationInteractionController.Instance.HoverMarginScreenPct
+				: 0.01f;
+			return width > 0f ? width * pct : 10f;
+		}
 
 		public double VisualizationRadius
 		{
@@ -88,7 +153,10 @@ namespace GravitasDemo.Rendering
 
 			Debug.Log($"[{GetType().Name}] Initialized");
 
-			_sceneEntitiesPool = new ObjectPool<EntityMapObject>(CreateEntity, OnGetFromPool, OnReleaseToPool, OnDestroyPooledObject, _collectionCheck, _defaultCapacity, _maxSize);
+			_selectionRingProperties = new MaterialPropertyBlock();
+			InitializeInstancedRendering();
+
+			_sceneCelestialsPool = new ObjectPool<CelestialMapObject>(CreateCelestial, OnGetFromPool, OnReleaseToPool, OnDestroyPooledObject, _collectionCheck, _defaultCapacityCelestials, _maxSizeCelestials);
 
 			_sceneEntityGroupsPool = new ObjectPool<EntityGroupMapObject>(CreateEntityGroup, OnGetFromPool, OnReleaseToPool, OnDestroyPooledObject, _collectionCheck, _defaultCapacityGroups, _maxSizeGroups);
 
@@ -102,12 +170,27 @@ namespace GravitasDemo.Rendering
 
 		void OnDestroy()
 		{
-			_trajectoryRenderer.Cleanup();
+			if (_trajectoryRenderer != null)
+				_trajectoryRenderer.Cleanup();
+
+			CleanupInstancedRendering();
 
 			if (SaveManager.Instance)
 			{
 				SaveManager.Instance.OnLoad -= SetIsLoaded;
 				SaveManager.Instance.OnReset -= ClearRendererState;
+			}
+
+			if (_transformPositions.IsCreated)
+			{
+				_transformPositions.Dispose();
+				_transformRotations.Dispose();
+				_transformIsCelestial.Dispose();
+				_transformRadii.Dispose();
+				_transformOutPosX.Dispose();
+				_transformOutPosY.Dispose();
+				_transformOutScale.Dispose();
+				_transformOutRot.Dispose();
 			}
 			
 			if (Instance == this) Instance = null;
@@ -135,9 +218,10 @@ namespace GravitasDemo.Rendering
 			UpdateVisibleObjectTransforms();
 			_trajectoryRenderer.UpdateTrajectories();
 
-			float time = PhysicsManager2D.Instance.SimulationElapsedTime;
+			double time = PhysicsManager2D.Instance.SimulationElapsedTime;
 			TimeSpan t = TimeSpan.FromSeconds(time);
-			_simTimeText.text = $"T+{(int)t.TotalHours:0000}:{t.Minutes:00}:{t.Seconds:00}";
+			if (_simTimeText != null)
+				_simTimeText.text = $"T+{(int)t.TotalHours:0000}:{t.Minutes:00}:{t.Seconds:00}";
 		}
 
 		private void ValidateSetup()
@@ -183,65 +267,631 @@ namespace GravitasDemo.Rendering
 			_isBoundsDirty = false;
 		}
 
+		// private void UpdateVisibleObjectTransforms()
+		// {
+		// 	if (!_isSimulationSystemLoaded) return;
+
+		// 	// Cache external C++ properties to prevent boundary crossing in the loop
+		// 	float rectWidth = _visualizationArea.rect.width;
+		// 	float rectHeight = _visualizationArea.rect.height;
+		// 	double minX = _cachedBounds.MinX;
+		// 	double minY = _cachedBounds.MinY;
+		// 	double sizeX = _cachedBounds.Size.x;
+		// 	double sizeY = _cachedBounds.Size.y;
+
+		// 	var visibleEntities = EntitiesManager.Instance.VisibleEntities;
+		// 	foreach (var entity in visibleEntities)
+		// 	{
+		// 		var bodyVisual = EntitiesManager.Instance.GetVisualForEntity(entity);
+		// 		if (bodyVisual != null)
+		// 		{
+		// 			// Only invoke UpdateVisual when observation state is gained or lost on a visible entity
+		// 			if (entity.IsObserved != bodyVisual.LastObservedState)
+		// 			{
+		// 				bodyVisual.UpdateVisual();
+		// 			}
+		// 			UpdateEntityTransform(bodyVisual, rectWidth, rectHeight, minX, minY, sizeX, sizeY);
+		// 		}
+		// 	}
+
+		// 	var visibleGroups = EntityGroupsManager.Instance.Groups;
+		// 	foreach (var group in visibleGroups)
+		// 	{
+		// 		var bodyVisual = EntityGroupsManager.Instance.GetVisualForGroup(group);
+		// 		if (bodyVisual != null)
+		// 		{
+		// 			UpdateGroupTransform(bodyVisual, rectWidth, rectHeight, minX, minY, sizeX, sizeY);
+		// 		}
+		// 	}
+		// }
+
+		private void EnsureTransformArrayCapacities(int capacity)
+		{
+			if (!_transformPositions.IsCreated || _transformPositions.Length < capacity)
+			{
+				if (_transformPositions.IsCreated)
+				{
+					_transformPositions.Dispose();
+					_transformRotations.Dispose();
+					_transformIsCelestial.Dispose();
+					_transformRadii.Dispose();
+					_transformOutPosX.Dispose();
+					_transformOutPosY.Dispose();
+					_transformOutScale.Dispose();
+					_transformOutRot.Dispose();
+				}
+
+				int padded = Mathf.CeilToInt(capacity * 1.3f);
+				_transformPositions = new NativeArray<double2>(padded, Allocator.Persistent);
+				_transformRotations = new NativeArray<float>(padded, Allocator.Persistent);
+				_transformIsCelestial = new NativeArray<bool>(padded, Allocator.Persistent);
+				_transformRadii = new NativeArray<double>(padded, Allocator.Persistent);
+				_transformOutPosX = new NativeArray<float>(padded, Allocator.Persistent);
+				_transformOutPosY = new NativeArray<float>(padded, Allocator.Persistent);
+				_transformOutScale = new NativeArray<float>(padded, Allocator.Persistent);
+				_transformOutRot = new NativeArray<float>(padded, Allocator.Persistent);
+			}
+
+			if (_cachedVisualsBuffer.Capacity < capacity)
+			{
+				_cachedVisualsBuffer.Capacity = Mathf.CeilToInt(capacity * 1.3f);
+			}
+		}
+
 		private void UpdateVisibleObjectTransforms()
 		{
-			if (!_isSimulationSystemLoaded) return;
+			_cachedVisualsBuffer.Clear();
+			if (!_isSimulationSystemLoaded || EntitiesManager.Instance == null || EntityGroupsManager.Instance == null)
+			{
+				RenderInstancedMapObjects();
+				return;
+			}
 
-			// Cache external C++ properties to prevent boundary crossing in the loop
-			float rectWidth = _visualizationArea.rect.width;
-			float rectHeight = _visualizationArea.rect.height;
+			Rect rect = _visualizationArea.rect;
+			float rectWidth = rect.width;
+			float rectXMin = rect.xMin;
+			float rectXMax = rect.xMax;
+			float rectYMin = rect.yMin;
+			float rectYMax = rect.yMax;
+
 			double minX = _cachedBounds.MinX;
 			double minY = _cachedBounds.MinY;
 			double sizeX = _cachedBounds.Size.x;
 			double sizeY = _cachedBounds.Size.y;
 
 			var visibleEntities = EntitiesManager.Instance.VisibleEntities;
+			var visibleGroups = EntityGroupsManager.Instance.Groups;
+			int totalCount = visibleEntities.Count + visibleGroups.Count;
+			if (totalCount == 0)
+			{
+				RenderInstancedMapObjects();
+				return;
+			}
+
+			EnsureTransformArrayCapacities(totalCount);
+			int index = 0;
+
+			// Normal entities are data-only handles; celestial entities use a small number of
+			// dedicated UI objects because each has its own material/shader configuration.
 			foreach (var entity in visibleEntities)
 			{
-				var bodyVisual = EntitiesManager.Instance.GetVisualForEntity(entity);
-				if (bodyVisual != null)
-				{
-					// Only invoke UpdateVisual when observation state is gained or lost on a visible entity
-					if (entity.IsObserved != bodyVisual.LastObservedState)
-					{
-						bodyVisual.UpdateVisual();
-					}
-					UpdateEntityTransform(bodyVisual, rectWidth, rectHeight, minX, minY, sizeX, sizeY);
-				}
+				MapObject mapObject = entity.IsCelestial
+					? (MapObject)EntitiesManager.Instance.GetCelestialVisualForEntity(entity)
+					: EntitiesManager.Instance.GetVisualForEntity(entity);
+				if (!CircularRaycastTarget.IsAlive(mapObject))
+					continue;
+
+				if (mapObject is EntityMapObject normalVisual && entity.IsObserved != normalVisual.LastObservedState)
+					normalVisual.UpdateVisual();
+
+				_transformPositions[index] = entity.Position;
+				_transformRotations[index] = entity.Orientation;
+				_transformIsCelestial[index] = entity.IsCelestial;
+				_transformRadii[index] = entity.PhysicsBody.Radius;
+				_cachedVisualsBuffer.Add(mapObject);
+				index++;
 			}
 
-			var visibleGroups = EntityGroupsManager.Instance.Groups;
+			// Groups deliberately retain their pre-existing GameObject/UI Graphic path.
 			foreach (var group in visibleGroups)
 			{
-				var bodyVisual = EntityGroupsManager.Instance.GetVisualForGroup(group);
-				if (bodyVisual != null)
+				var groupVisual = EntityGroupsManager.Instance.GetVisualForGroup(group);
+				if (!CircularRaycastTarget.IsAlive(groupVisual))
+					continue;
+
+				_transformPositions[index] = group.Position;
+				_transformRotations[index] = 0f;
+				_transformIsCelestial[index] = false;
+				_transformRadii[index] = 50.0;
+				_cachedVisualsBuffer.Add(groupVisual);
+				index++;
+			}
+
+			if (index == 0)
+			{
+				RenderInstancedMapObjects();
+				return;
+			}
+
+			var job = new UpdateTransformsJob
+			{
+				Positions = _transformPositions,
+				Rotations = _transformRotations,
+				IsCelestial = _transformIsCelestial,
+				Radii = _transformRadii,
+				MinX = minX,
+				MinY = minY,
+				SizeX = sizeX,
+				SizeY = sizeY,
+				RectWidth = rectWidth,
+				MinPixelSize = _minPixelSize,
+				MinPixelSizeCelestial = _minPixelSizeCelestial,
+				MinPixelSizeProjectile = _minPixelSizeProjectile,
+				OutPosX = _transformOutPosX,
+				OutPosY = _transformOutPosY,
+				OutScale = _transformOutScale,
+				OutRot = _transformOutRot
+			};
+
+			JobHandle handle = job.Schedule(index, 64);
+			handle.Complete();
+
+			for (int i = 0; i < index; i++)
+			{
+				_cachedVisualsBuffer[i].ApplyTransformData(
+					_transformOutPosX[i],
+					_transformOutPosY[i],
+					_transformOutScale[i],
+					_transformOutRot[i],
+					sizeX,
+					rectXMin,
+					rectXMax,
+					rectYMin,
+					rectYMax);
+			}
+
+			RenderInstancedMapObjects();
+		}
+
+		#region GPU Instanced Map Rendering
+
+		private void InitializeInstancedRendering()
+		{
+			if (_visualizationArea == null)
+				return;
+
+			_instancingSupported = SystemInfo.supportsInstancing;
+			if (!_instancingSupported)
+				Debug.LogError($"[{GetType().Name}] This platform does not support GPU instancing.", this);
+
+			if (_mapObjectInstancedMaterial == null)
+			{
+				Shader shader = Shader.Find("GravitasDemo/MapObjectInstanced");
+				if (shader != null)
 				{
-					UpdateGroupTransform(bodyVisual, rectWidth, rectHeight, minX, minY, sizeX, sizeY);
+					_mapObjectInstancedMaterial = new Material(shader);
+					_ownsMapObjectMaterial = true;
 				}
 			}
+
+			if (_mapObjectInstancedMaterial != null)
+				_mapObjectInstancedMaterial.enableInstancing = true;
+			else
+				Debug.LogError($"[{GetType().Name}] Missing GravitasDemo/MapObjectInstanced material/shader.", this);
+
+			if (_selectionRingInstancedMaterial == null)
+			{
+				Shader ringShader = Shader.Find("GravitasDemo/MapObjectSelectionRing");
+				if (ringShader != null)
+				{
+					_selectionRingInstancedMaterial = new Material(ringShader);
+					_ownsSelectionRingMaterial = true;
+				}
+			}
+			if (_selectionRingInstancedMaterial != null)
+				_selectionRingInstancedMaterial.enableInstancing = true;
+			else
+				Debug.LogWarning($"[{GetType().Name}] Selection-ring shader not found; normal entities will not have instanced selection outlines.", this);
+
+			_unitQuadMesh = CreateUnitQuadMesh();
+
+			// One shared UI parent preserves the visualization area's local coordinate system
+			// for celestial/group Graphics. This is a single container, not one object per entity.
+			GameObject mapUIContainer = new GameObject("Map Object UI Container", typeof(RectTransform));
+			_mapObjectUIContainer = mapUIContainer.GetComponent<RectTransform>();
+			_mapObjectUIContainer.SetParent(_bodiesContainer != null ? _bodiesContainer : _visualizationArea, false);
+			_mapObjectUIContainer.anchorMin = Vector2.zero;
+			_mapObjectUIContainer.anchorMax = Vector2.one;
+			_mapObjectUIContainer.offsetMin = Vector2.zero;
+			_mapObjectUIContainer.offsetMax = Vector2.zero;
+			_mapObjectUIContainer.localPosition = Vector3.zero;
+			_mapObjectUIContainer.localRotation = Quaternion.identity;
+			_mapObjectUIContainer.localScale = Vector3.one;
+
+			GameObject cameraObject = new GameObject("Instanced Map Render Camera");
+			cameraObject.transform.SetParent(transform, false);
+			_mapRenderCameraObject = cameraObject;
+			_mapRenderCamera = cameraObject.AddComponent<Camera>();
+			_mapRenderCamera.enabled = false; // Render explicitly after submitting this frame's batches.
+			_mapRenderCamera.orthographic = true;
+			_mapRenderCamera.clearFlags = CameraClearFlags.SolidColor;
+			_mapRenderCamera.backgroundColor = new Color(0f, 0f, 0f, 0f);
+			_mapRenderCamera.cullingMask = 1 << _mapRenderLayer;
+			_mapRenderCamera.useOcclusionCulling = false;
+			_mapRenderCamera.allowHDR = false;
+			_mapRenderCamera.allowMSAA = false;
+			_mapRenderCamera.nearClipPlane = 0.1f;
+			_mapRenderCamera.farClipPlane = 50f;
+
+			Transform imageParent = _mapObjectUIContainer != null ? _mapObjectUIContainer : _visualizationArea;
+			GameObject imageObject = new GameObject("Instanced Map Output", typeof(RectTransform), typeof(RawImage));
+			RectTransform imageRect = imageObject.GetComponent<RectTransform>();
+			imageRect.SetParent(imageParent, false);
+			imageRect.anchorMin = Vector2.zero;
+			imageRect.anchorMax = Vector2.one;
+			imageRect.offsetMin = Vector2.zero;
+			imageRect.offsetMax = Vector2.zero;
+			imageRect.localPosition = Vector3.zero;
+			imageRect.localRotation = Quaternion.identity;
+			imageRect.localScale = Vector3.one;
+
+			_mapRenderImage = imageObject.GetComponent<RawImage>();
+			_mapRenderImage.color = Color.white;
+			_mapRenderImage.raycastTarget = false;
+			_mapRenderImage.maskable = true;
+			_mapRenderImage.transform.SetAsFirstSibling();
+
+			RefreshMapRenderTexture();
+			UpdateMapCameraTransform();
 		}
 
-		private void UpdateEntityTransform(EntityMapObject entityObject, float rectWidth, float rectHeight, double minX, double minY, double sizeX, double sizeY)
+		private void CleanupInstancedRendering()
 		{
-			var position = entityObject.PhysicsBody.Position;
+			if (_mapRenderCamera != null)
+				_mapRenderCamera.targetTexture = null;
 
-			float percX = (float)((position.x - minX) / sizeX);
-			float percY = (float)((position.y - minY) / sizeY);
+			if (_mapRenderTexture != null)
+			{
+				_mapRenderTexture.Release();
+				if (Application.isPlaying) Destroy(_mapRenderTexture);
+				else DestroyImmediate(_mapRenderTexture);
+				_mapRenderTexture = null;
+			}
 
-			float actualMinVisiblePixelSize = entityObject.PhysicsBody.IsCelestial ? _minPixelSizeCelestial : entityObject.Entity.Type == EntityType.Missile || entityObject.Entity.Type == EntityType.Projectile ? _minPixelSizeProjectile : _minPixelSize;
+			foreach (var pair in _spriteMeshCache)
+			{
+				if (pair.Value == null) continue;
+				if (Application.isPlaying) Destroy(pair.Value);
+				else DestroyImmediate(pair.Value);
+			}
+			_spriteMeshCache.Clear();
+			_spriteBatches.Clear();
+			_activeSpriteBatches.Clear();
+			_activeSpriteBatchSet.Clear();
 
-			entityObject.UpdateTransform(percX, percY, rectWidth, rectHeight, sizeX, actualMinVisiblePixelSize);
+			if (_unitQuadMesh != null)
+			{
+				if (Application.isPlaying) Destroy(_unitQuadMesh);
+				else DestroyImmediate(_unitQuadMesh);
+				_unitQuadMesh = null;
+			}
+
+			if (_ownsMapObjectMaterial && _mapObjectInstancedMaterial != null)
+			{
+				if (Application.isPlaying) Destroy(_mapObjectInstancedMaterial);
+				else DestroyImmediate(_mapObjectInstancedMaterial);
+			}
+
+			if (_ownsSelectionRingMaterial && _selectionRingInstancedMaterial != null)
+			{
+				if (Application.isPlaying) Destroy(_selectionRingInstancedMaterial);
+				else DestroyImmediate(_selectionRingInstancedMaterial);
+			}
+
+			if (_mapRenderCameraObject != null)
+			{
+				if (Application.isPlaying) Destroy(_mapRenderCameraObject);
+				else DestroyImmediate(_mapRenderCameraObject);
+			}
+
+			if (_mapObjectUIContainer != null)
+			{
+				if (Application.isPlaying) Destroy(_mapObjectUIContainer.gameObject);
+				else DestroyImmediate(_mapObjectUIContainer.gameObject);
+				_mapObjectUIContainer = null;
+			}
+
 		}
 
-		private void UpdateGroupTransform(EntityGroupMapObject groupObject, float rectWidth, float rectHeight, double minX, double minY, double sizeX, double sizeY)
+		private void RefreshMapRenderTexture()
 		{
-			var position = groupObject.SimPos;
+			if (_visualizationArea == null || _mapRenderCamera == null)
+				return;
 
-			float percX = (float)((position.x - minX) / sizeX);
-			float percY = (float)((position.y - minY) / sizeY);
+			Rect rect = _visualizationArea.rect;
+			Canvas canvas = _visualizationArea.GetComponentInParent<Canvas>();
+			float canvasScale = canvas != null ? canvas.scaleFactor : 1f;
+			Vector3 areaScale = _visualizationArea.lossyScale;
+			float scaleX = Mathf.Max(0.0001f, Mathf.Abs(areaScale.x));
+			float scaleY = Mathf.Max(0.0001f, Mathf.Abs(areaScale.y));
+			int width = Mathf.Clamp(
+				Mathf.CeilToInt(rect.width * canvasScale * scaleX * _renderTextureResolutionScale),
+				1, SystemInfo.maxTextureSize);
+			int height = Mathf.Clamp(
+				Mathf.CeilToInt(rect.height * canvasScale * scaleY * _renderTextureResolutionScale),
+				1, SystemInfo.maxTextureSize);
 
-			groupObject.UpdateTransform(percX, percY, rectWidth, rectHeight, sizeX, _pixelSizeGroup);
+			if (_mapRenderTexture != null && _mapRenderTexture.width == width && _mapRenderTexture.height == height)
+				return;
+
+			if (_mapRenderTexture != null)
+			{
+				_mapRenderTexture.Release();
+				if (Application.isPlaying) Destroy(_mapRenderTexture);
+				else DestroyImmediate(_mapRenderTexture);
+			}
+
+			_mapRenderTexture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32)
+			{
+				name = "Instanced Map Render Texture",
+				filterMode = FilterMode.Bilinear,
+				wrapMode = TextureWrapMode.Clamp,
+				useMipMap = false,
+				autoGenerateMips = false,
+				antiAliasing = 1
+			};
+			_mapRenderTexture.Create();
+			_mapRenderCamera.targetTexture = _mapRenderTexture;
+			if (_mapRenderImage != null)
+				_mapRenderImage.texture = _mapRenderTexture;
 		}
+
+		private void UpdateMapCameraTransform()
+		{
+			if (_mapRenderCamera == null || _visualizationArea == null)
+				return;
+
+			Rect rect = _visualizationArea.rect;
+			Vector3 areaScale = _visualizationArea.lossyScale;
+			float scaleX = Mathf.Max(0.0001f, Mathf.Abs(areaScale.x));
+			float scaleY = Mathf.Max(0.0001f, Mathf.Abs(areaScale.y));
+			Vector3 centerWorld = _visualizationArea.TransformPoint(rect.center);
+			Quaternion areaRotation = _visualizationArea.rotation;
+			Vector3 cameraForward = areaRotation * Vector3.forward;
+
+			_mapRenderCamera.transform.SetPositionAndRotation(centerWorld - cameraForward * 20f, areaRotation);
+			_mapRenderCamera.orthographicSize = rect.height * scaleY * 0.5f;
+			_mapRenderCamera.aspect = (rect.width * scaleX) / Mathf.Max(0.0001f, rect.height * scaleY);
+		}
+
+		private Matrix4x4 GetMapObjectMatrix(MapObject mapObject)
+		{
+			Vector3 areaScale = _visualizationArea.lossyScale;
+			Vector3 worldPosition = _visualizationArea.TransformPoint(
+				new Vector3(mapObject.ViewPosition.x, mapObject.ViewPosition.y, 0f));
+			Quaternion worldRotation = _visualizationArea.rotation *
+				Quaternion.Euler(0f, 0f, mapObject.RenderRotationDegrees);
+			Vector3 worldScale = new Vector3(
+				mapObject.PixelDiameter * Mathf.Abs(areaScale.x),
+				mapObject.PixelDiameter * Mathf.Abs(areaScale.y),
+				1f);
+			return Matrix4x4.TRS(worldPosition, worldRotation, worldScale);
+		}
+
+		private void RenderInstancedMapObjects()
+		{
+			if (_mapRenderCamera == null || _visualizationArea == null)
+				return;
+
+			RefreshMapRenderTexture();
+			UpdateMapCameraTransform();
+
+			foreach (SpriteBatch existingBatch in _spriteBatches.Values)
+				existingBatch.Count = 0;
+			_activeSpriteBatches.Clear();
+			_activeSpriteBatchSet.Clear();
+
+			for (int i = 0; i < _cachedVisualsBuffer.Count; i++)
+			{
+				MapObject mapObject = _cachedVisualsBuffer[i];
+				// Only normal entities are submitted to the instanced renderer. Celestials and
+				// groups are UI Graphics and render through their own Canvas hierarchy.
+				if (!(mapObject is EntityMapObject entityVisual) ||
+					!CircularRaycastTarget.IsAlive(entityVisual) || entityVisual.PixelDiameter <= 0f)
+					continue;
+
+				Matrix4x4 matrix = GetMapObjectMatrix(entityVisual);
+				Sprite sprite = entityVisual.RenderSprite;
+				if (sprite == null || _mapObjectInstancedMaterial == null || !_instancingSupported)
+					continue;
+
+				if (!_spriteBatches.TryGetValue(sprite, out SpriteBatch batch))
+				{
+					Mesh spriteMesh = GetOrCreateSpriteMesh(sprite);
+					if (spriteMesh == null)
+						continue;
+
+					batch = new SpriteBatch { Sprite = sprite, Mesh = spriteMesh };
+					_spriteBatches.Add(sprite, batch);
+				}
+
+				if (_activeSpriteBatchSet.Add(batch))
+					_activeSpriteBatches.Add(batch);
+
+				batch.Matrices[batch.Count] = matrix;
+				batch.Colors[batch.Count] = entityVisual.RenderColor;
+				batch.Count++;
+
+				if (batch.Count == MaxInstancesPerDraw)
+					FlushSpriteBatch(batch);
+			}
+
+			for (int i = 0; i < _activeSpriteBatches.Count; i++)
+				FlushSpriteBatch(_activeSpriteBatches[i]);
+
+			RenderSelectedEntityIndicators();
+			_mapRenderCamera.Render();
+		}
+
+		/// <summary>
+		/// Draws selection outlines for data-only entities. This keeps the normal-entity
+		/// path entirely free of per-entity UI indicator GameObjects as well as visual GameObjects.
+		/// </summary>
+		private void RenderSelectedEntityIndicators()
+		{
+			if (_selectionRingInstancedMaterial == null || !_instancingSupported ||
+				SimulationInteractionController.Instance == null)
+				return;
+
+			IReadOnlyList<MapObject> selected = SimulationInteractionController.Instance.SelectedMapObjects;
+			int count = 0;
+			for (int i = 0; i < selected.Count; i++)
+			{
+				if (!(selected[i] is EntityMapObject entityVisual) ||
+					!CircularRaycastTarget.IsAlive(entityVisual) || entityVisual.PixelDiameter <= 0f)
+					continue;
+
+				float diameter = entityVisual.PixelDiameter + 2f * _selectionRingPaddingPixels;
+				Vector3 areaScale = _visualizationArea.lossyScale;
+				Vector3 worldPosition = _visualizationArea.TransformPoint(
+					new Vector3(entityVisual.ViewPosition.x, entityVisual.ViewPosition.y, 0f));
+				Vector3 worldScale = new Vector3(
+					diameter * Mathf.Abs(areaScale.x),
+					diameter * Mathf.Abs(areaScale.y),
+					1f);
+				_selectionRingMatrices[count] = Matrix4x4.TRS(worldPosition, _visualizationArea.rotation, worldScale);
+				_selectionRingColors[count] = _selectionRingColor;
+				count++;
+
+				if (count == MaxInstancesPerDraw)
+				{
+					FlushSelectionRingBatch(count);
+					count = 0;
+				}
+			}
+
+			if (count > 0)
+				FlushSelectionRingBatch(count);
+		}
+
+		private void FlushSelectionRingBatch(int count)
+		{
+			_selectionRingProperties.Clear();
+			_selectionRingProperties.SetVectorArray(InstanceColorID, _selectionRingColors);
+			_selectionRingProperties.SetFloat("_RingRadius", 0.465f);
+			_selectionRingProperties.SetFloat("_RingHalfWidth", _selectionRingThickness * 0.5f);
+
+			RenderParams renderParams = new RenderParams(_selectionRingInstancedMaterial)
+			{
+				camera = _mapRenderCamera,
+				layer = _mapRenderLayer,
+				matProps = _selectionRingProperties,
+				shadowCastingMode = ShadowCastingMode.Off,
+				receiveShadows = false
+			};
+
+			Graphics.RenderMeshInstanced(
+				renderParams,
+				_unitQuadMesh,
+				0,
+				_selectionRingMatrices,
+				count);
+		}
+
+		private void FlushSpriteBatch(SpriteBatch batch)
+		{
+			if (batch == null || batch.Count <= 0 || batch.Mesh == null || batch.Sprite == null)
+				return;
+
+			batch.Properties.Clear();
+			batch.Properties.SetTexture(MainTexID, batch.Sprite.texture);
+			batch.Properties.SetVectorArray(InstanceColorID, batch.Colors);
+
+			RenderParams renderParams = new RenderParams(_mapObjectInstancedMaterial)
+			{
+				camera = _mapRenderCamera,
+				layer = _mapRenderLayer,
+				matProps = batch.Properties,
+				shadowCastingMode = ShadowCastingMode.Off,
+				receiveShadows = false
+			};
+
+			Graphics.RenderMeshInstanced(
+				renderParams,
+				batch.Mesh,
+				0,
+				batch.Matrices,
+				batch.Count);
+
+			batch.Count = 0;
+		}
+
+		private Mesh GetOrCreateSpriteMesh(Sprite sprite)
+		{
+			if (sprite == null)
+				return null;
+			if (_spriteMeshCache.TryGetValue(sprite, out Mesh cachedMesh))
+				return cachedMesh;
+
+			Vector2[] sourceVertices = sprite.vertices;
+			Vector2[] sourceUVs = sprite.uv;
+			ushort[] sourceTriangles = sprite.triangles;
+			if (sourceVertices == null || sourceUVs == null || sourceTriangles == null ||
+				sourceVertices.Length < 3 || sourceUVs.Length != sourceVertices.Length || sourceTriangles.Length < 3)
+				return _unitQuadMesh;
+
+			Bounds bounds = sprite.bounds;
+			float width = Mathf.Max(bounds.size.x, 0.000001f);
+			float height = Mathf.Max(bounds.size.y, 0.000001f);
+			Vector3[] vertices = new Vector3[sourceVertices.Length];
+			for (int i = 0; i < sourceVertices.Length; i++)
+			{
+				vertices[i] = new Vector3(
+					(sourceVertices[i].x - bounds.center.x) / width,
+					(sourceVertices[i].y - bounds.center.y) / height,
+					0f);
+			}
+
+			int[] triangles = new int[sourceTriangles.Length];
+			for (int i = 0; i < sourceTriangles.Length; i++)
+				triangles[i] = sourceTriangles[i];
+
+			Mesh mesh = new Mesh
+			{
+				name = $"Instanced Sprite Mesh - {sprite.name}",
+				 hideFlags = HideFlags.DontSave
+			};
+			mesh.vertices = vertices;
+			mesh.uv = sourceUVs;
+			mesh.triangles = triangles;
+			mesh.RecalculateBounds();
+			_spriteMeshCache.Add(sprite, mesh);
+			return mesh;
+		}
+
+		private static Mesh CreateUnitQuadMesh()
+		{
+			Mesh mesh = new Mesh { name = "Instanced Map Unit Quad", hideFlags = HideFlags.DontSave };
+			mesh.vertices = new[]
+			{
+				new Vector3(-0.5f, -0.5f, 0f),
+				new Vector3( 0.5f, -0.5f, 0f),
+				new Vector3( 0.5f,  0.5f, 0f),
+				new Vector3(-0.5f,  0.5f, 0f)
+			};
+			mesh.uv = new[]
+			{
+				new Vector2(0f, 0f),
+				new Vector2(1f, 0f),
+				new Vector2(1f, 1f),
+				new Vector2(0f, 1f)
+			};
+			mesh.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+			mesh.RecalculateBounds();
+			return mesh;
+		}
+
+		#endregion
 
 		#region Public API
 
@@ -492,43 +1142,48 @@ namespace GravitasDemo.Rendering
 		// throw an exception if we try to return an existing item, already in the pool
 		private bool _collectionCheck = false;
 
-		#region Entity Pooling
+		#region Celestial Pooling
 
-		private IObjectPool<EntityMapObject> _sceneEntitiesPool;
+		private IObjectPool<CelestialMapObject> _sceneCelestialsPool;
+		private int _defaultCapacityCelestials = 16;
+		private int _maxSizeCelestials = 128;
 
-		// extra options to control the pool capacity and maximum size
-		private int _defaultCapacity = 1000;
-		private int _maxSize = 50000;
-		
-		public EntityMapObject GetEntityFromPool(Entity entity)
+		public CelestialMapObject GetCelestialVisualFromPool(Entity entity)
 		{
-			var body = _sceneEntitiesPool.Get();
-			body.InitializeBody(entity);
-			UpdateEntityTransform(body, _visualizationArea.rect.width, _visualizationArea.rect.height, _cachedBounds.MinX, _cachedBounds.MinY, _cachedBounds.Size.x, _cachedBounds.Size.y);
+			if (_sceneCelestialsPool == null)
+			{
+				Debug.LogError($"[{GetType().Name}] Celestial pool is not initialized.", this);
+				return null;
+			}
 
-			return body;
+			CelestialMapObject visual = _sceneCelestialsPool.Get();
+			visual.InitializeBody(entity);
+			return visual;
 		}
 
-		EntityMapObject CreateEntity()
+		private CelestialMapObject CreateCelestial()
 		{
-			EntityMapObject bodyInstance = Instantiate(_entityPrefab, _bodiesContainer);
-			bodyInstance.ObjectPool = _sceneEntitiesPool;
+			if (_celestialPrefab == null)
+				throw new InvalidOperationException("SimulationRenderer requires a CelestialMapObject prefab.");
 
-			return bodyInstance;
+			Transform parent = _mapObjectUIContainer != null ? _mapObjectUIContainer : _visualizationArea;
+			CelestialMapObject instance = Instantiate(_celestialPrefab, parent);
+			instance.ObjectPool = _sceneCelestialsPool;
+			return instance;
 		}
 
-		void OnGetFromPool(EntityMapObject pooledObject)
+		private void OnGetFromPool(CelestialMapObject pooledObject)
 		{
 			pooledObject.gameObject.SetActive(true);
 		}
 
-		void OnReleaseToPool(EntityMapObject pooledObject)
+		private void OnReleaseToPool(CelestialMapObject pooledObject)
 		{
 			pooledObject.Deinitialize();
 			pooledObject.gameObject.SetActive(false);
 		}
 
-		void OnDestroyPooledObject(EntityMapObject pooledObject)
+		private void OnDestroyPooledObject(CelestialMapObject pooledObject)
 		{
 			pooledObject.Deinitialize();
 			Destroy(pooledObject.gameObject);
@@ -536,7 +1191,7 @@ namespace GravitasDemo.Rendering
 
 		#endregion
 
-		#region Entity Group Pooling
+				#region Entity Group Pooling
 
 		private IObjectPool<EntityGroupMapObject> _sceneEntityGroupsPool;
 
@@ -548,14 +1203,14 @@ namespace GravitasDemo.Rendering
 		{
 			var body = _sceneEntityGroupsPool.Get();
 			body.InitializeBody(group);
-			UpdateGroupTransform(body, _visualizationArea.rect.width, _visualizationArea.rect.height, _cachedBounds.MinX, _cachedBounds.MinY, _cachedBounds.Size.x, _cachedBounds.Size.y);
+			// UpdateGroupTransform(body, _visualizationArea.rect.width, _visualizationArea.rect.height, _cachedBounds.MinX, _cachedBounds.MinY, _cachedBounds.Size.x, _cachedBounds.Size.y);
 
 			return body;
 		}
 
 		EntityGroupMapObject CreateEntityGroup()
 		{
-			EntityGroupMapObject bodyInstance = Instantiate(_groupPrefab, _bodiesContainer);
+			EntityGroupMapObject bodyInstance = Instantiate(_groupPrefab, _mapObjectUIContainer != null ? _mapObjectUIContainer : _visualizationArea);
 			bodyInstance.ObjectPool = _sceneEntityGroupsPool;
 
 			return bodyInstance;
@@ -581,5 +1236,45 @@ namespace GravitasDemo.Rendering
 		#endregion
 
 		#endregion
+	}
+
+	[BurstCompile]
+	public struct UpdateTransformsJob : IJobParallelFor
+	{
+		[ReadOnly] public NativeArray<double2> Positions;
+		[ReadOnly] public NativeArray<float> Rotations;
+		[ReadOnly] public NativeArray<bool> IsCelestial;
+		[ReadOnly] public NativeArray<double> Radii;
+		[ReadOnly] public double MinX;
+		[ReadOnly] public double MinY;
+		[ReadOnly] public double SizeX;
+		[ReadOnly] public double SizeY;
+		[ReadOnly] public float RectWidth;
+		[ReadOnly] public float MinPixelSize;
+		[ReadOnly] public float MinPixelSizeCelestial;
+		[ReadOnly] public float MinPixelSizeProjectile;
+
+		[WriteOnly] public NativeArray<float> OutPosX;
+		[WriteOnly] public NativeArray<float> OutPosY;
+		[WriteOnly] public NativeArray<float> OutScale;
+		[WriteOnly] public NativeArray<float> OutRot;
+
+		public void Execute(int index)
+		{
+			double2 pos = Positions[index];
+			float percX = (float)((pos.x - MinX) / SizeX);
+			float percY = (float)((pos.y - MinY) / SizeY);
+
+			OutPosX[index] = percX;
+			OutPosY[index] = percY;
+			OutRot[index] = Rotations[index];
+
+			bool celestial = IsCelestial[index];
+			float actualMinPixelSize = celestial ? MinPixelSizeCelestial : MinPixelSize;
+			float radiusMultiplier = celestial ? 2.6f : 2.0f;
+			float accuratePixelSize = (float)(Radii[index] / SizeX) * RectWidth * radiusMultiplier;
+
+			OutScale[index] = math.max(accuratePixelSize, actualMinPixelSize);
+		}
 	}
 }

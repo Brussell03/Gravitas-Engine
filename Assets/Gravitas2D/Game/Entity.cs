@@ -85,14 +85,14 @@ namespace GravitasDemo
 		public bool IsAutonomouslyRunning => _autonomyController.IsRunning;
 		public bool IsGroupable => _isGroupable;
 
-		public Entity(PhysicsBody body, string name, EntityType type, bool isOwned = false)
+		public Entity(PhysicsBody body, string name, EntityType type, bool isOwned = false, bool isKnown = false)
 		{
 			// Input validation: Body reference is strictly required for entity evaluation
 			if (body == null) throw new ArgumentNullException(nameof(body), "Entity initialization requires a valid PhysicsBody.");
 			
 			_physicsBody = body;
 			_isOwned = isOwned;
-			_isKnown = isOwned;
+			_isKnown = isOwned || isKnown;
 			_isObserved = isOwned;
 			_name = name;
 			_entityType = type;

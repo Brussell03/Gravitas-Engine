@@ -239,7 +239,12 @@ namespace GravitasDemo
 			UpdateNavigation(entity, dt);
 
 			var navCap = entity.GetCapability<NavigationCapability>();
-			if (navCap == null || !navCap.IsNavigating)
+			if (_isRendezvous && navCap != null && navCap.RendezvousSolutionFailed)
+			{
+				Status = TaskStatus.Failed;
+				navCap.EndNavigation();
+			}
+			else if (navCap == null || !navCap.IsNavigating)
 			{
 				// Navigation finished successfully
 				Status = TaskStatus.Completed;
@@ -267,7 +272,7 @@ namespace GravitasDemo
 			}
 
 			bool trajectoryComputed = navCap.IsRendezvousMode
-				? navCap.ComputeRendezvousTrajectory()
+				? navCap.ComputeRendezvousTrajectory(dt)
 				: navCap.ComputeInterceptTrajectory();
 
 			if (trajectoryComputed)
@@ -282,15 +287,19 @@ namespace GravitasDemo
 					entity.PhysicsBody.AddTorque(analogTorque);
 				}
 
-				float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * navCap.MaxForce;
-				entity.PhysicsBody.AddWorldForce(worldForce);
+				float throttle = navCap.IsRendezvousMode ? navCap.BurnThrottle : 1f;
+				float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * (navCap.MaxForce * throttle);
+				if (throttle > 1e-5f)
+					entity.PhysicsBody.AddWorldForce(worldForce);
 
-				double2 activeTargetPos = navCap.TargetEntity != null ? navCap.TargetEntity.Position : navCap.TargetPosition;
-				double distanceToTarget = math.distance(entity.Position, activeTargetPos);
-				double relativeSpeed = navCap.TargetEntity != null ? math.distance(entity.Velocity, navCap.TargetEntity.Velocity) : math.distance(entity.Position, navCap.TargetVelocity);
+				// Use the actual guidance aim point (including rendezvous clearance) and its
+				// matching velocity. The previous check used the target centre for entity targets
+				// and compared position against velocity for position targets.
+				double distanceToTarget = math.distance(entity.Position, navCap.TargetPosition);
+				double relativeSpeed = math.distance(entity.Velocity, navCap.TargetVelocity);
 
 				bool arrived = navCap.IsRendezvousMode
-					? (distanceToTarget <= navCap.ArrivalThreshold && relativeSpeed <= 1.0)
+					? (distanceToTarget <= navCap.ArrivalThreshold && relativeSpeed <= navCap.RendezvousVelocityThreshold)
 					: (distanceToTarget <= navCap.ArrivalThreshold);
 
 				if (arrived)
@@ -298,8 +307,11 @@ namespace GravitasDemo
 					navCap.EndNavigation();
 				}
 			}
-			else
+			else if (!navCap.IsRendezvousMode || navCap.TimeOfFlight == 0f)
 			{
+				// A rendezvous solver returning false with Tgo == 0 means the terminal
+				// position-and-relative-velocity capture condition was met. A failed/invalid
+				// solve must not be silently reported as a completed navigation task.
 				navCap.EndNavigation();
 			}
 		}

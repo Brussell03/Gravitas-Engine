@@ -8,7 +8,7 @@ namespace Gravitas2D
 	{
 		[BurstCompile]
 		public static void CalculateDerivative(
-			float time,
+			double time,
 			in StateVector x,
 			in VehicleModel vehicleModel,
 			in double2 gravity_w,

@@ -132,7 +132,7 @@ namespace GravitasDemo
 				if (PhysicsManager2D.Instance == null) yield break;
 				
 				// Calculate the absolute simulation time threshold for the next spawn
-				float targetSimTime = PhysicsManager2D.Instance.SimulationElapsedTime + waitTime;
+				double targetSimTime = PhysicsManager2D.Instance.SimulationElapsedTime + waitTime;
 
 				// Yield execution until the simulation clock surpasses the calculated target time
 				yield return new WaitUntil(() =>

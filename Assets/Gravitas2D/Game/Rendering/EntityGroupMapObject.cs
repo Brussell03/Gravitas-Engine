@@ -1,5 +1,4 @@
 using Gravitas2D;
-using GravitasDemo.Interaction;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Pool;
@@ -7,83 +6,138 @@ using UnityEngine.UI;
 
 namespace GravitasDemo.Rendering
 {
-	public class EntityGroupMapObject : MapObject
+	[RequireComponent(typeof(RectTransform), typeof(CircularRaycastTarget))]
+	public sealed class EntityGroupMapObject : MonoBehaviour, MapObject
 	{
 		private EntityGroup _group;
 		private IObjectPool<EntityGroupMapObject> _objectPool;
+		private RectTransform _rectTransform;
+		private Image _imageComponent;
+		private RectTransform _imageRectTransform;
+		private CircularRaycastTarget _raycastTarget;
+		private Vector2 _viewPosition;
+		private float _pixelDiameter;
 
+		public Entity Entity => null;
 		public EntityGroup Group => _group;
-		public double2 SimPos => _group.Position;
-		public override bool IsDestroyed => _group == null || _group.IsDestroyed;
-		public override string Name => _group.Name;
+		public double2 SimPos => _group != null ? _group.Position : double2.zero;
+		public RectTransform RectTransform => _rectTransform;
+		public bool IsDestroyed => _group == null || _group.IsDestroyed;
+		public bool IsVisualActive => this != null && isActiveAndEnabled;
+		public bool IsCelestial => false;
+		public string Name => _group != null ? _group.Name : string.Empty;
+
+		public Vector2 ViewPosition => _viewPosition;
+		public float PixelDiameter => _pixelDiameter;
+		public float RenderRotationDegrees => 0f;
+		public Sprite RenderSprite => _imageComponent != null ? _imageComponent.sprite : null;
+		public Color RenderColor => _imageComponent != null ? _imageComponent.color : Color.floralWhite;
+		public Material RenderMaterial => null;
 
 		public IObjectPool<EntityGroupMapObject> ObjectPool { set => _objectPool = value; }
 
+		private void Awake()
+		{
+			_rectTransform = GetComponent<RectTransform>();
+			_imageComponent = GetComponentInChildren<Image>(true);
+			_imageRectTransform = _imageComponent != null ? _imageComponent.rectTransform : null;
+			_raycastTarget = GetComponent<CircularRaycastTarget>();
+
+			if (_imageRectTransform != null && _imageRectTransform != _rectTransform)
+			{
+				_imageRectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+				_imageRectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+				_imageRectTransform.anchoredPosition = Vector2.zero;
+			}
+
+			if (_imageComponent != null)
+				_imageComponent.raycastTarget = false;
+		}
+
 		public void InitializeBody(EntityGroup group)
 		{
+			if (group == null)
+				throw new System.ArgumentNullException(nameof(group));
+
 			_group = group;
+			_viewPosition = Vector2.zero;
+			_pixelDiameter = 0f;
 
-			_imageComponent.material = null;
+			if (_rectTransform != null)
+			{
+				_rectTransform.anchorMin = Vector2.zero;
+				_rectTransform.anchorMax = Vector2.zero;
+			}
 
-			_baseColor = Color.floralWhite;
-			_imageComponent.color = _baseColor;
-			
-			_lastScaleReference = -1;
-
-			_rectTransform.anchorMin = Vector2.zero;
-			_rectTransform.anchorMax = Vector2.zero;
-
-			UpdateVisual();
-		}
-
-		public override void UpdateVisual()
-		{
-		}
-
-		public override void Deinitialize()
-		{
-			_group = null;
 			if (_imageComponent != null)
 			{
+				_imageComponent.enabled = true;
 				_imageComponent.material = null;
+				_imageComponent.color = Color.floralWhite;
 			}
+		}
+
+		public void UpdateVisual()
+		{
+			// Group appearance is constant.
+		}
+
+		public void Deinitialize()
+		{
+			_group = null;
+			_pixelDiameter = 0f;
+			_viewPosition = Vector2.zero;
+			if (_imageComponent != null)
+				_imageComponent.material = null;
 		}
 
 		public void Deactivate()
 		{
-			_objectPool.Release(this);
+			if (_objectPool != null)
+				_objectPool.Release(this);
 		}
 
-		public override void UpdateTransform(float percX, float percY, float rectWidth, float rectHeight, double boundsSizeX, float minVisiblePixelSize)
+		public void ApplyTransformData(
+			float percX,
+			float percY,
+			float finalPixelSize,
+			float rotationRadians,
+			double boundsSizeX,
+			float rectXMin,
+			float rectXMax,
+			float rectYMin,
+			float rectYMax)
 		{
-			base.UpdateTransform(percX, percY, rectWidth, rectHeight, boundsSizeX, minVisiblePixelSize);
+			float localX = Mathf.LerpUnclamped(rectXMin, rectXMax, percX);
+			float localY = Mathf.LerpUnclamped(rectYMin, rectYMax, percY);
+			_viewPosition = new Vector2(localX, localY);
 
-			// Change Detection: Only update Unity's transform if the zoom level actually changed
-			if (math.abs(_lastScaleReference - boundsSizeX) < 1e-5) return;
-			
-			_lastScaleReference = boundsSizeX;
+			if (_rectTransform != null)
+				_rectTransform.localPosition = new Vector3(localX, localY, _rectTransform.localPosition.z);
 
-			float accuratePixelSize = (float)(100 / boundsSizeX) * rectWidth;;
+			float rectWidth = rectXMax - rectXMin;
+			float accuratePixelSize = boundsSizeX > 0.0
+				? (float)(100.0 / boundsSizeX) * rectWidth
+				: 0f;
+			_pixelDiameter = Mathf.Max(accuratePixelSize, finalPixelSize);
 
-			// Clamp to ensure visibility
-			float finalPixelSize = Mathf.Max(accuratePixelSize, minVisiblePixelSize);
-
+			float hoverMarginPixels = SimulationRenderer.Instance != null
+				? SimulationRenderer.Instance.GetHoverMarginPixels()
+				: 10f;
 			if (_imageRectTransform != null)
+				_imageRectTransform.sizeDelta = new Vector2(_pixelDiameter, _pixelDiameter);
+			if (_rectTransform != null && _imageRectTransform != _rectTransform)
 			{
-				_imageRectTransform.sizeDelta = new Vector2(finalPixelSize, finalPixelSize);
+				float totalRectSize = _pixelDiameter + hoverMarginPixels * 2f;
+				_rectTransform.sizeDelta = new Vector2(totalRectSize, totalRectSize);
 			}
+		}
 
-			float hoverMarginPixels = 10f;
-			if (SimulationRenderer.Instance != null && SimulationRenderer.Instance.VisualizationArea != null)
-			{
-				float pct = SimulationInteractionController.Instance != null 
-					? SimulationInteractionController.Instance.HoverMarginScreenPct 
-					: 0.01f;
-				hoverMarginPixels = SimulationRenderer.Instance.VisualizationArea.rect.width * pct;
-			}
-
-			float totalRectSize = finalPixelSize + (hoverMarginPixels * 2f);
-			_rectTransform.sizeDelta = new Vector2(totalRectSize, totalRectSize);
+		public bool Raycast(Vector2 localUIPosition, float hoverMarginPixels)
+		{
+			return _raycastTarget != null
+				? _raycastTarget.Raycast(this, localUIPosition, hoverMarginPixels)
+				: CircularRaycastTarget.IsHit(this, localUIPosition, hoverMarginPixels);
 		}
 	}
 }

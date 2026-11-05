@@ -302,7 +302,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Missile
+  m_text: Mine
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -10385,7 +10385,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: v0.1.3
+  m_text: v0.1.4
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -16495,6 +16495,9 @@ MonoBehaviour:
   - {fileID: 11400000, guid: c189830fe29e51843a3ca41068eaca36, type: 2}
   - {fileID: 11400000, guid: 1f466a23e6f40074dbf6d68de3d08be9, type: 2}
   _spatialCellSize: 1000000
+  _gravityEphemerisHorizon: 604800
+  _gravityEphemerisSampleInterval: 60
+  _gravityEphemerisIntegrationStep: 10
 --- !u!4 &1212088362
 Transform:
   m_ObjectHideFlags: 0
@@ -16525,7 +16528,7 @@ MonoBehaviour:
   _visualizationArea: {fileID: 1044880060}
   _bodiesContainer: {fileID: 1044880060}
   _trajectoriesContainer: {fileID: 1988955679}
-  _entityPrefab: {fileID: 6086411589914965580, guid: 491469e7f50b20641bff241e55c2f070, type: 3}
+  _celestialPrefab: {fileID: 4254073884588870829, guid: 491469e7f50b20641bff241e55c2f070, type: 3}
   _groupPrefab: {fileID: 7589180459044415779, guid: 8706a1ed456914d49896a2865121d189, type: 3}
   _simTimeText: {fileID: 1270571452}
   _bodyImageTypes:
@@ -16545,6 +16548,13 @@ MonoBehaviour:
   _minPixelSizeProjectile: 5
   _minPixelSizeCelestial: 32
   _pixelSizeGroup: 16
+  _mapObjectInstancedMaterial: {fileID: 2100000, guid: 91d49f8a8f0e57f4c94822a02e56a8fa, type: 2}
+  _selectionRingInstancedMaterial: {fileID: 2100000, guid: e88a2fe6f2810e74eb23fe4c38355d39, type: 2}
+  _selectionRingColor: {r: 1, g: 0.85, b: 0.2, a: 0.95}
+  _selectionRingPaddingPixels: 4
+  _selectionRingThickness: 0.035
+  _mapRenderLayer: 0
+  _renderTextureResolutionScale: 1
 --- !u!114 &1212088368
 MonoBehaviour:
   m_ObjectHideFlags: 0
