@@ -1,98 +1,171 @@
-using System.Collections.Generic;
+using Gravitas2D;
+using GravitasDemo.Interaction;
 using Unity.Mathematics;
 using UnityEngine;
-using Gravitas2D;
 using TMPro;
 
 namespace GravitasDemo.Rendering
 {
+	/// <summary>
+	/// Procedural simulation grid. The CPU computes only the grid's scale and phase;
+	/// a single UI quad and its fragment shader draw every major/minor line.
+	///
+	/// The reference-center rules intentionally match the former LineGraphic-based grid.
+	/// </summary>
 	[DefaultExecutionOrder(100)]
-	public class GridVisualizer : MonoBehaviour
+	public sealed class GridVisualizer : MonoBehaviour
 	{
 		[Header("Grid Configuration")]
-		[Tooltip("Multiplier applied to the current order of magnitude to define grid density. (e.g., 0.1 provides ~10 lines per axis).")]
+		[Tooltip("Multiplier applied to the current order of magnitude to define grid density. (e.g., 0.1 provides ~10 major lines per axis).")]
 		[SerializeField] private double _scaleDensity = 0.1;
 		[SerializeField] private int magnitudeBase = 5;
-		[SerializeField] private float _gridThickness = 1.0f;
+		[SerializeField] private float _gridThickness = 2f;
 		[SerializeField] private Color _gridColor = new Color(1f, 1f, 1f, 0.1f);
+		[Tooltip("Use a material created from GravitasDemo/ProceduralGrid. If left empty, the shader is found at runtime.")]
 		[SerializeField] private Material _gridMaterial;
 		[SerializeField] private RectTransform _gridContainer;
 
 		[Header("Minor Grid Configuration")]
 		[Tooltip("Number of subdivisions between major grid lines.")]
 		[SerializeField, Min(1)] private int _minorSubdivisions = 5;
-		[SerializeField] private float _minorGridThickness = 0.5f;
+		[SerializeField] private float _minorGridThickness = 1f;
 		[SerializeField] private Color _minorGridColor = new Color(1f, 1f, 1f, 0.05f);
 
-		[Tooltip("Failsafe to prevent Unity freezes if zoomed out too far with an invalid grid scale.")]
+		[Header("Safety")]
+		[Tooltip("Preserves the former line-count failsafe. Each axis renders at most this many major intervals multiplied by the subdivision count, plus the starting line.")]
 		[SerializeField] private int _maxLinesPerAxis = 500;
 		[SerializeField] private TextMeshProUGUI _scaleText;
 
-		private List<LineGraphic> _majorGridLines = new List<LineGraphic>();
-		private List<LineGraphic> _minorGridLines = new List<LineGraphic>();
-		private int _activeMajorLineCount = 0;
-		private int _activeMinorLineCount = 0;
-		private double _dynamicGridScale = 1000000;
+		private GridShaderGraphic _gridGraphic;
+		private double _dynamicGridScale = 1000000.0;
 		private double2 _gridReferenceCenter;
 		private double2 _previousViewCenter;
 		private double2 _lastEntityPos;
-		private bool _isInitialized = false;
-		private Entity _lastTrackedEntity = null;
-		private bool _wasTrackingLastFrame = false;
+		private bool _isInitialized;
+		private Entity _lastTrackedEntity;
+		private bool _wasTrackingLastFrame;
+		private double _lastScaleTextValue = double.NaN;
+		private double _lastScaleBoundsSizeX = double.NaN;
+		private double _lastScaleDensity = double.NaN;
+		private int _lastMagnitudeBase = int.MinValue;
+		private bool _warnedMissingShader;
 
 		public double CurrentGridScale => _dynamicGridScale;
 
-		void LateUpdate()
+		private void LateUpdate()
 		{
-			if (SimulationRenderer.Instance == null || SimulationRenderer.Instance.VisualizationArea == null) 
+			SimulationRenderer renderer = SimulationRenderer.Instance;
+			if (renderer == null || renderer.VisualizationArea == null)
 				return;
-				
-			DrawGrid();
+
+			if (!EnsureGridGraphic(renderer))
+				return;
+
+			UpdateGrid(renderer);
 		}
 
-		private bool IsUserPanning()
+		private bool EnsureGridGraphic(SimulationRenderer renderer)
 		{
-			if (SimulationRenderer.Instance == null) return false;
+			if (_gridGraphic != null)
+				return _gridGraphic.IsInitialized;
 
-			// Check Middle-Mouse Drag
-			bool isMousePanning = SimulationRenderer.Instance.IsMouseInVisualizationArea() &&
-								Input.GetMouseButton(2) &&
-								(Mathf.Abs(Input.GetAxis("Mouse X")) > 0.001f || Mathf.Abs(Input.GetAxis("Mouse Y")) > 0.001f);
+			Material sourceMaterial = _gridMaterial;
+			Material temporaryMaterial = null;
 
-			// Check WASD / Arrow Key Panning
+			if (sourceMaterial == null ||
+				!sourceMaterial.HasProperty("_GridMajorColor") ||
+				!sourceMaterial.HasProperty("_GridMinorColor") ||
+				!sourceMaterial.HasProperty("_GridMajorThickness") ||
+				!sourceMaterial.HasProperty("_GridMinorThickness") ||
+				!sourceMaterial.HasProperty("_GridPhase") ||
+				!sourceMaterial.HasProperty("_GridCells") ||
+				!sourceMaterial.HasProperty("_GridEnabled"))
+			{
+				Shader shader = Shader.Find("GravitasDemo/ProceduralGrid");
+				if (shader == null)
+				{
+					if (!_warnedMissingShader)
+					{
+						Debug.LogError($"[{GetType().Name}] Could not find shader 'GravitasDemo/ProceduralGrid'. Assign a material using that shader to GridVisualizer.", this);
+						_warnedMissingShader = true;
+					}
+					return false;
+				}
+
+				temporaryMaterial = new Material(shader)
+				{
+					name = "Procedural Grid Runtime Source",
+					hideFlags = HideFlags.DontSave
+				};
+				sourceMaterial = temporaryMaterial;
+			}
+
+			Transform parent = _gridContainer != null ? _gridContainer : renderer.VisualizationArea;
+			GameObject gridObject = new GameObject(
+				"Procedural Simulation Grid",
+				typeof(RectTransform),
+				typeof(CanvasRenderer),
+				typeof(GridShaderGraphic));
+
+			RectTransform gridRect = gridObject.GetComponent<RectTransform>();
+			gridRect.SetParent(parent, false);
+			gridRect.anchorMin = Vector2.zero;
+			gridRect.anchorMax = Vector2.one;
+			gridRect.pivot = new Vector2(0.5f, 0.5f);
+			gridRect.offsetMin = Vector2.zero;
+			gridRect.offsetMax = Vector2.zero;
+			gridRect.localPosition = Vector3.zero;
+			gridRect.localRotation = Quaternion.identity;
+			gridRect.localScale = Vector3.one;
+
+			_gridGraphic = gridObject.GetComponent<GridShaderGraphic>();
+			_gridGraphic.Initialize(sourceMaterial);
+			_gridGraphic.raycastTarget = false;
+			_gridGraphic.maskable = true;
+			_gridGraphic.color = Color.white;
+
+			if (temporaryMaterial != null)
+				Destroy(temporaryMaterial);
+
+			return _gridGraphic.IsInitialized;
+		}
+
+		private bool IsUserPanning(SimulationRenderer renderer)
+		{
+			// Do not perform a UI raycast every frame. First test whether middle-mouse
+			// input is actually active; the old expression raycasted even when it was not.
+			bool isMousePanning = Input.GetMouseButton(2) &&
+				(Mathf.Abs(Input.GetAxis("Mouse X")) > 0.001f ||
+				 Mathf.Abs(Input.GetAxis("Mouse Y")) > 0.001f) &&
+				renderer.IsMouseInVisualizationArea();
+
 			bool isKeyboardPanning = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.A) ||
-									Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D) ||
-									Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) ||
-									Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow);
+				Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.D) ||
+				Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) ||
+				Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow);
 
 			return isMousePanning || isKeyboardPanning;
 		}
 
-		private void DrawGrid()
+		private void UpdateGrid(SimulationRenderer renderer)
 		{
-			_activeMajorLineCount = 0;
-			_activeMinorLineCount = 0;
-			var bounds = SimulationRenderer.Instance.ViewBounds;
-			
-			// Input validation: Prevent log10(0) or looping indefinitely
-			if (bounds.Size.x <= 0 || bounds.Size.y <= 0) 
-				return;
-
-			double2 currentViewCenter = SimulationRenderer.Instance.ViewCenter;
-
-			// Check which entity is currently tracked in the simulation
-			Entity currentTrackedEntity = null;
-			if (EntitiesManager.Instance != null)
+			Bounds2D bounds = renderer.ViewBounds;
+			if (bounds.Size.x <= 0.0 || bounds.Size.y <= 0.0)
 			{
-				foreach (var entity in EntitiesManager.Instance.KnownEntities)
-				{
-					if (entity.IsTracked)
-					{
-						currentTrackedEntity = entity;
-						break;
-					}
-				}
+				_gridGraphic.SetGridEnabled(false);
+				return;
 			}
+
+			double2 currentViewCenter = renderer.ViewCenter;
+
+			// The interaction controller already owns the tracked map object. Reading it
+			// directly avoids scanning every known entity on every grid update.
+			MapObject trackedMapObject = SimulationInteractionController.Instance != null
+				? SimulationInteractionController.Instance.TrackedMapObject
+				: null;
+			Entity currentTrackedEntity = trackedMapObject != null ? trackedMapObject.Entity : null;
+			if (currentTrackedEntity != null && currentTrackedEntity.IsDestroyed)
+				currentTrackedEntity = null;
 
 			bool isTracking = currentTrackedEntity != null;
 
@@ -104,137 +177,118 @@ namespace GravitasDemo.Rendering
 			}
 			else if (isTracking)
 			{
-				var entityVisual = EntitiesManager.Instance != null ? EntitiesManager.Instance.GetVisualForEntity(currentTrackedEntity) : null;
+				double2 currentEntityPos = currentTrackedEntity.Position;
 
-				if (entityVisual != null)
+				if (!_wasTrackingLastFrame || currentTrackedEntity != _lastTrackedEntity)
 				{
-					double2 currentEntityPos = entityVisual.PhysicsBody.Position;
-
-					if (!_wasTrackingLastFrame || currentTrackedEntity != _lastTrackedEntity)
-					{
-						_gridReferenceCenter = currentViewCenter;
-						_lastEntityPos = currentEntityPos;
-					}
-					else
-					{
-						// Move grid reference center by the entity's exact movement delta.
-						// This keeps the grid locked to the fast-moving entity while allowing manual pan offsets.
-						double2 entityDelta = currentEntityPos - _lastEntityPos;
-						_gridReferenceCenter += entityDelta;
-						_lastEntityPos = currentEntityPos;
-					}
+					_gridReferenceCenter = currentViewCenter;
+					_lastEntityPos = currentEntityPos;
 				}
 				else
 				{
-					_gridReferenceCenter = currentViewCenter;
+					// Move the grid reference by the tracked body's exact world-space delta.
+					// Manual pan offsets therefore remain unchanged, as in the previous grid.
+					double2 entityDelta = currentEntityPos - _lastEntityPos;
+					_gridReferenceCenter += entityDelta;
+					_lastEntityPos = currentEntityPos;
 				}
 			}
 			else
 			{
-				// Free-roam mode
 				double2 viewCenterDelta = currentViewCenter - _previousViewCenter;
 				bool isZooming = Mathf.Abs(Input.mouseScrollDelta.y) > 0.01f;
-				
-				// Do not adjust reference center if the user is panning or actively zooming off-center
-				if (!IsUserPanning() && !isZooming && math.lengthsq(viewCenterDelta) > 0)
-				{
+
+				// Free-roam mode: preserve the previous rule that the grid's world anchor
+				// follows view-center changes only when they are not user pan/zoom input.
+				if (!IsUserPanning(renderer) && !isZooming && math.lengthsq(viewCenterDelta) > 0.0)
 					_gridReferenceCenter += viewCenterDelta;
-				}
 			}
 
 			_previousViewCenter = currentViewCenter;
 			_lastTrackedEntity = currentTrackedEntity;
 			_wasTrackingLastFrame = isTracking;
 
-			// Ensure we don't divide by zero or take log of a negative number by forcing a minimum base of 2
-			int safeBase = math.max(2, magnitudeBase);
-			
-			// Calculate the base order of magnitude of the current view window and apply the density target
-			double viewMagnitude = math.pow(safeBase, math.round(math.log(bounds.Size.x) / math.log(safeBase)));
-			_dynamicGridScale = viewMagnitude * _scaleDensity;
-
-			if (_dynamicGridScale <= 0) return;
+			UpdateDynamicScale(bounds.Size.x);
+			if (_dynamicGridScale <= 0.0 || double.IsNaN(_dynamicGridScale) || double.IsInfinity(_dynamicGridScale))
+			{
+				_gridGraphic.SetGridEnabled(false);
+				return;
+			}
 
 			int subdivisions = math.max(1, _minorSubdivisions);
 			double minorStep = _dynamicGridScale / subdivisions;
-
-			double endX = bounds.MinX + bounds.Size.x;
-			double endY = bounds.MinY + bounds.Size.y;
-
-			// --- Draw Vertical Lines (Index-Based) ---
-			double relMinX = bounds.MinX - _gridReferenceCenter.x;
-			double relMaxX = endX - _gridReferenceCenter.x;
-
-			int iStart = (int)math.floor(relMinX / minorStep);
-			int iEnd = (int)math.ceil(relMaxX / minorStep);
-
-			int linesDrawn = 0;
-			for (int i = iStart; i <= iEnd; i++)
+			if (minorStep <= 0.0 || double.IsNaN(minorStep) || double.IsInfinity(minorStep))
 			{
-				if (linesDrawn++ > _maxLinesPerAxis * subdivisions) break;
-
-				double x = _gridReferenceCenter.x + i * minorStep;
-				Vector2 p1 = SimulationRenderer.Instance.SimPositionToViewUI(new double2(x, bounds.MinY));
-				Vector2 p2 = SimulationRenderer.Instance.SimPositionToViewUI(new double2(x, endY));
-
-				if (i % subdivisions == 0)
-				{
-					UpdateMajorLine(p1, p2);
-				}
-				else
-				{
-					UpdateMinorLine(p1, p2);
-				}
+				_gridGraphic.SetGridEnabled(false);
+				return;
 			}
 
-			// --- Draw Horizontal Lines (Index-Based) ---
-			double relMinY = bounds.MinY - _gridReferenceCenter.y;
-			double relMaxY = endY - _gridReferenceCenter.y;
+			// Keep the large world coordinates in double precision on the CPU. Only a
+			// fractional phase and a small modulo are sent to the GPU, avoiding float
+			// precision loss at AU-scale coordinates and beyond.
+			double relativeMinX = (bounds.MinX - _gridReferenceCenter.x) / minorStep;
+			double relativeMinY = (bounds.MinY - _gridReferenceCenter.y) / minorStep;
+			double startIndexX = math.floor(relativeMinX);
+			double startIndexY = math.floor(relativeMinY);
+			float phaseX = (float)(relativeMinX - startIndexX);
+			float phaseY = (float)(relativeMinY - startIndexY);
 
-			int jStart = (int)math.floor(relMinY / minorStep);
-			int jEnd = (int)math.ceil(relMaxY / minorStep);
+			float startModuloX = PositiveModulo(startIndexX, subdivisions);
+			float startModuloY = PositiveModulo(startIndexY, subdivisions);
+			float cellsAcrossX = (float)(bounds.Size.x / minorStep);
+			float cellsAcrossY = (float)(bounds.Size.y / minorStep);
+			float maxLineIndex = (float)((double)_maxLinesPerAxis * subdivisions);
 
-			linesDrawn = 0;
-			for (int j = jStart; j <= jEnd; j++)
-			{
-				if (linesDrawn++ > _maxLinesPerAxis * subdivisions) break;
+			_gridGraphic.SetGridParameters(
+				new Vector4(phaseX, phaseY, startModuloX, startModuloY),
+				new Vector4(cellsAcrossX, cellsAcrossY, subdivisions, maxLineIndex),
+				_gridThickness,
+				_minorGridThickness,
+				_gridColor,
+				_minorGridColor);
+			_gridGraphic.SetGridEnabled(true);
 
-				double y = _gridReferenceCenter.y + j * minorStep;
-				Vector2 p1 = SimulationRenderer.Instance.SimPositionToViewUI(new double2(bounds.MinX, y));
-				Vector2 p2 = SimulationRenderer.Instance.SimPositionToViewUI(new double2(endX, y));
-
-				if (j % subdivisions == 0)
-				{
-					UpdateMajorLine(p1, p2);
-				}
-				else
-				{
-					UpdateMinorLine(p1, p2);
-				}
-			}
-
-			// Deactivate unused pooled major lines
-			for (int i = _activeMajorLineCount; i < _majorGridLines.Count; i++)
-			{
-				if (_majorGridLines[i].gameObject.activeSelf)
-				{
-					_majorGridLines[i].gameObject.SetActive(false);
-				}
-			}
-
-			// Deactivate unused pooled minor lines
-			for (int i = _activeMinorLineCount; i < _minorGridLines.Count; i++)
-			{
-				if (_minorGridLines[i].gameObject.activeSelf)
-				{
-					_minorGridLines[i].gameObject.SetActive(false);
-				}
-			}
-
-			if (_scaleText) _scaleText.text = FormatDistance(_dynamicGridScale);
+			UpdateScaleText();
 		}
 
-		private string FormatDistance(double meters)
+		private void UpdateDynamicScale(double viewSizeX)
+		{
+			// The scale depends only on horizontal world span and serialized grid
+			// configuration. Avoid pow/log work when none of those inputs changed.
+			if (_lastScaleBoundsSizeX == viewSizeX &&
+				_lastScaleDensity == _scaleDensity &&
+				_lastMagnitudeBase == magnitudeBase)
+				return;
+
+			int safeBase = math.max(2, magnitudeBase);
+			double viewMagnitude = math.pow(
+				safeBase,
+				math.round(math.log(viewSizeX) / math.log(safeBase)));
+			_dynamicGridScale = viewMagnitude * _scaleDensity;
+
+			_lastScaleBoundsSizeX = viewSizeX;
+			_lastScaleDensity = _scaleDensity;
+			_lastMagnitudeBase = magnitudeBase;
+		}
+
+		private static float PositiveModulo(double value, int divisor)
+		{
+			double remainder = value % divisor;
+			if (remainder < 0.0)
+				remainder += divisor;
+			return (float)remainder;
+		}
+
+		private void UpdateScaleText()
+		{
+			if (_scaleText == null || _lastScaleTextValue == _dynamicGridScale)
+				return;
+
+			_scaleText.text = FormatDistance(_dynamicGridScale);
+			_lastScaleTextValue = _dynamicGridScale;
+		}
+
+		private static string FormatDistance(double meters)
 		{
 			double absMeters = math.abs(meters);
 			if (absMeters < 1000.0) return $"{meters:0} m";
@@ -243,48 +297,24 @@ namespace GravitasDemo.Rendering
 			return $"{meters / 1_000_000_000.0:0.0} Gm";
 		}
 
-		private void UpdateMajorLine(Vector2 p1, Vector2 p2)
+		private void OnValidate()
 		{
-			LineGraphic graphic;
-
-			if (_activeMajorLineCount < _majorGridLines.Count)
-			{
-				graphic = _majorGridLines[_activeMajorLineCount];
-				if (!graphic.gameObject.activeSelf) 
-				{
-					graphic.gameObject.SetActive(true);
-				}
-			}
-			else
-			{
-				graphic = LineGraphic.CreateLine($"MajorGridLine_{_activeMajorLineCount}", _gridThickness, _gridColor, _gridMaterial, LineType.Grid, _gridContainer);
-				_majorGridLines.Add(graphic);
-			}
-
-			graphic.SetPoints(new Vector2[] { p1, p2 });
-			_activeMajorLineCount++;
+			_lastScaleBoundsSizeX = double.NaN;
+			_lastScaleDensity = double.NaN;
+			_lastMagnitudeBase = int.MinValue;
+			_lastScaleTextValue = double.NaN;
 		}
 
-		private void UpdateMinorLine(Vector2 p1, Vector2 p2)
+		private void OnDestroy()
 		{
-			LineGraphic graphic;
-
-			if (_activeMinorLineCount < _minorGridLines.Count)
+			if (_gridGraphic != null)
 			{
-				graphic = _minorGridLines[_activeMinorLineCount];
-				if (!graphic.gameObject.activeSelf) 
-				{
-					graphic.gameObject.SetActive(true);
-				}
+				if (Application.isPlaying)
+					Destroy(_gridGraphic.gameObject);
+				else
+					DestroyImmediate(_gridGraphic.gameObject);
+				_gridGraphic = null;
 			}
-			else
-			{
-				graphic = LineGraphic.CreateLine($"MinorGridLine_{_activeMinorLineCount}", _minorGridThickness, _minorGridColor, _gridMaterial, LineType.Grid, _gridContainer);
-				_minorGridLines.Add(graphic);
-			}
-
-			graphic.SetPoints(new Vector2[] { p1, p2 });
-			_activeMinorLineCount++;
 		}
 	}
 }
