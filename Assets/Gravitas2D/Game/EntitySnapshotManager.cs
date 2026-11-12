@@ -131,7 +131,7 @@ namespace GravitasDemo
 							sensitivity = sensor.Sensitivity
 						});
 					}
-					else if (cap is LaunchCapability launcher)
+					else if (cap is RailgunCapability launcher)
 					{
 						snapshot.capabilities.Add(new CapabilitySnapshot
 						{
@@ -155,23 +155,23 @@ namespace GravitasDemo
 					}
 					else if (cap is NavigationCapability nav)
 					{
-						snapshot.capabilities.Add(new CapabilitySnapshot
-						{
-							type = "navigation",
-							maxForce = nav.MaxForce,
-							arrivalThreshold = nav.ArrivalThreshold,
-							maxTorque = nav.MaxTorque,
-							targetOrientation = Mathf.Rad2Deg * nav.TargetOrientation,
-							isNavigating = nav.IsNavigating,
-							isRendezvousMode = nav.IsRendezvousMode,
-							isStationKeepingMode = nav.IsStationKeepingMode,
-							isOrbitMatchMode = nav.IsOrbitMatchMode,
-							targetEntityName = nav.TargetEntity?.Name,
-							targetPosition = new double[] { nav.TargetPosition.x, nav.TargetPosition.y },
-							targetOrbitEntityName = nav.TargetOrbitEntity?.Name,
-							targetOrbitPosition = new double[] { nav.TargetOrbitPositionOffset.x, nav.TargetOrbitPositionOffset.y },
-							targetOrbitVelocity = new double[] { nav.TargetOrbitVelocity.x, nav.TargetOrbitVelocity.y }
-						});
+						// snapshot.capabilities.Add(new CapabilitySnapshot
+						// {
+						// 	type = "navigation",
+						// 	maxForce = nav.MaxForce,
+						// 	arrivalThreshold = nav.ArrivalThreshold,
+						// 	maxTorque = nav.MaxTorque,
+						// 	targetOrientation = Mathf.Rad2Deg * nav.TargetOrientation,
+						// 	isNavigating = nav.IsNavigating,
+						// 	isRendezvousMode = nav.IsRendezvousMode,
+						// 	isStationKeepingMode = nav.IsStationKeepingMode,
+						// 	isOrbitMatchMode = nav.IsOrbitMatchMode,
+						// 	targetEntityName = nav.TargetEntity?.Name,
+						// 	targetPosition = new double[] { nav.TargetPosition.x, nav.TargetPosition.y },
+						// 	targetOrbitEntityName = nav.TargetOrbitEntity?.Name,
+						// 	targetOrbitPosition = new double[] { nav.TargetOrbitPositionOffset.x, nav.TargetOrbitPositionOffset.y },
+						// 	targetOrbitVelocity = new double[] { nav.TargetOrbitVelocity.x, nav.TargetOrbitVelocity.y }
+						// });
 					}
 				}
 
@@ -248,8 +248,8 @@ namespace GravitasDemo
 								});
 								break;
 
-							case "launch":
-								capabilities.Add(new LaunchCapability
+							case "railgun":
+								capabilities.Add(new RailgunCapability
 								{
 									ProjectileCompositionIndex = capData.projectileCompositionIndex,
 									ProjectileRadius = capData.projectileRadius,
@@ -269,31 +269,31 @@ namespace GravitasDemo
 								break;
 							
 							case "navigation":
-								var navCap = new NavigationCapability
-								{
-									MaxForce = capData.maxForce > 0 ? capData.maxForce : 10000f,
-									ArrivalThreshold = capData.arrivalThreshold > 0 ? capData.arrivalThreshold : 50f,
-									MaxTorque = capData.maxTorque > 0 ? capData.maxTorque : 1000f,
-									TargetOrientation = Mathf.Deg2Rad * capData.targetOrientation,
-									IsNavigating = capData.isNavigating,
-									IsRendezvousMode = capData.isRendezvousMode,
-									IsStationKeepingMode = capData.isStationKeepingMode,
-									IsOrbitMatchMode = capData.isOrbitMatchMode,
-									TargetPosition = capData.targetPosition != null && capData.targetPosition.Length >= 2 
-										? new double2(capData.targetPosition[0], capData.targetPosition[1]) 
-										: double2.zero,
-									TargetOrbitPositionOffset = capData.targetOrbitPosition != null && capData.targetOrbitPosition.Length >= 2 
-										? new double2(capData.targetOrbitPosition[0], capData.targetOrbitPosition[1]) 
-										: double2.zero,
-									TargetOrbitVelocity = capData.targetOrbitVelocity != null && capData.targetOrbitVelocity.Length >= 2 
-										? new double2(capData.targetOrbitVelocity[0], capData.targetOrbitVelocity[1]) 
-										: double2.zero,
-									IsEnabled = true
-								};
+								// var navCap = new NavigationCapability
+								// {
+								// 	MaxForce = capData.maxForce > 0 ? capData.maxForce : 10000f,
+								// 	ArrivalThreshold = capData.arrivalThreshold > 0 ? capData.arrivalThreshold : 50f,
+								// 	MaxTorque = capData.maxTorque > 0 ? capData.maxTorque : 1000f,
+								// 	TargetOrientation = Mathf.Deg2Rad * capData.targetOrientation,
+								// 	IsNavigating = capData.isNavigating,
+								// 	IsRendezvousMode = capData.isRendezvousMode,
+								// 	IsStationKeepingMode = capData.isStationKeepingMode,
+								// 	IsOrbitMatchMode = capData.isOrbitMatchMode,
+								// 	TargetPosition = capData.targetPosition != null && capData.targetPosition.Length >= 2 
+								// 		? new double2(capData.targetPosition[0], capData.targetPosition[1]) 
+								// 		: double2.zero,
+								// 	TargetOrbitPositionOffset = capData.targetOrbitPosition != null && capData.targetOrbitPosition.Length >= 2 
+								// 		? new double2(capData.targetOrbitPosition[0], capData.targetOrbitPosition[1]) 
+								// 		: double2.zero,
+								// 	TargetOrbitVelocity = capData.targetOrbitVelocity != null && capData.targetOrbitVelocity.Length >= 2 
+								// 		? new double2(capData.targetOrbitVelocity[0], capData.targetOrbitVelocity[1]) 
+								// 		: double2.zero,
+								// 	IsEnabled = true
+								// };
 
-								capabilities.Add(navCap);
-								navigationLinkingData.Add((navCap, capData.targetEntityName, capData.targetOrbitEntityName));
-								break;
+								// capabilities.Add(navCap);
+								// navigationLinkingData.Add((navCap, capData.targetEntityName, capData.targetOrbitEntityName));
+								// break;
 
 							default:
 								Debug.LogWarning($"[{nameof(EntitySnapshotManager)}] Unknown capability type during restore: {capData.type}");
@@ -370,7 +370,7 @@ namespace GravitasDemo
 				}
 				if (!string.IsNullOrEmpty(link.TargetOrbitName) && EntitiesManager.Instance.EntityLookup.TryGetValue(link.TargetOrbitName, out var targetOrbitEnt))
 				{
-					link.NavCap.TargetOrbitEntity = targetOrbitEnt;
+					link.NavCap.TargetEntity = targetOrbitEnt;
 				}
 			}
 

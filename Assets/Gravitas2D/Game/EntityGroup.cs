@@ -123,5 +123,17 @@ namespace GravitasDemo
 
 			return new double2(_formationSeparation * index, 0);
 		}
+
+		public double2 GetFormationPosition(int index)
+		{
+			if (index == -1) return double2.zero;
+
+			return new double2(_formationSeparation * index, 0);
+		}
+
+		public int IndexOfMember(Entity entity)
+		{
+			return _entities.IndexOf(entity);
+		}
 	}
 }

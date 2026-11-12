@@ -500,10 +500,7 @@ namespace GravitasDemo.Interaction
 
 			_selectedMapObjects.Add(mapObj);
 
-			// Normal entities have no per-entity GameObjects. Their selection rings are
-			// submitted in a GPU-instanced overlay pass by SimulationRenderer. UI-backed
-			// celestials and groups may continue using the configured indicator prefab.
-			if (_selectionIndicatorPrefab != null && !(mapObj is EntityMapObject))
+			if (_selectionIndicatorPrefab != null)
 			{
 				Transform parentTransform = _selectionIndicatorsContainer != null ? _selectionIndicatorsContainer : _renderer.VisualizationArea;
 				RectTransform indicatorInstance = Instantiate(_selectionIndicatorPrefab, parentTransform);

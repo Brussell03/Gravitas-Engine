@@ -39,7 +39,7 @@ namespace GravitasDemo.Rendering
 
 			if (_currentEntity == null) return;
 
-			var launchCap = _currentEntity.GetCapability<LaunchCapability>();
+			var launchCap = _currentEntity.GetCapability<RailgunCapability>();
 			if (launchCap == null) return;
 
 			if (_timeOfFlights == null || _timeOfFlights.Count == 0) return;
@@ -85,7 +85,7 @@ namespace GravitasDemo.Rendering
 
 			if (entity == null || entity.IsDestroyed) return;
 
-			var launchCap = entity.GetCapability<LaunchCapability>();
+			var launchCap = entity.GetCapability<RailgunCapability>();
 			if (launchCap == null)
 			{
 				ClearLines();

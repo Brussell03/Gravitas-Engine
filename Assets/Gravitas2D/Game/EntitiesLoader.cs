@@ -85,8 +85,8 @@ namespace GravitasDemo
 									});
 									break;
 
-								case "launch":
-									capabilities.Add(new LaunchCapability
+								case "railgun":
+									capabilities.Add(new RailgunCapability
 									{
 										ProjectileCompositionIndex = capData.projectileCompositionIndex,
 										ProjectileRadius = capData.projectileRadius,
@@ -111,7 +111,6 @@ namespace GravitasDemo
 									capabilities.Add(new NavigationCapability
 									{
 										MaxForce = capData.maxForce > 0 ? capData.maxForce : 10000f,
-										ArrivalThreshold = capData.arrivalThreshold > 0 ? capData.arrivalThreshold : 10f,
 										MaxTorque = capData.maxTorque > 0 ? capData.maxTorque : 1000f,
 										TargetOrientation = Mathf.Deg2Rad * capData.targetOrientation
 									});
@@ -223,7 +222,6 @@ namespace GravitasDemo
 			public float maxTorque { get; set; }
 			public float targetOrientation { get; set; }
 			public float maxForce { get; set; }
-			public float arrivalThreshold { get; set; }
 			public double warheadEnergy { get; set; }
 			public int ammo { get; set; }
 		}

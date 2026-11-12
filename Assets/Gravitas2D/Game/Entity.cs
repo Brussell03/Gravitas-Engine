@@ -37,7 +37,7 @@ namespace GravitasDemo
 
 		private List<Entity> _observedEntities = new List<Entity>();
 		private List<IEntityCapability> _capabilities = new List<IEntityCapability>();
-		private LaunchCapability _launchCapability;
+		private RailgunCapability _launchCapability;
 		private MissileCapability _missileCapability;
 		private NavigationCapability _navigationCapability;
 
@@ -73,7 +73,7 @@ namespace GravitasDemo
 		public bool IsMissileLauncher => _missileCapability != null;
 		public bool IsNavigable => _navigationCapability != null;
 		public IAutonomousTask CurrentTask => _autonomyController.CurrentTask;
-		public LaunchCapability LaunchCapability => _launchCapability;
+		public RailgunCapability LaunchCapability => _launchCapability;
 		public MissileCapability MissileCapability => _missileCapability;
 		public NavigationCapability NavigationCapability => _navigationCapability;
 		public List<Entity> ObservedEntities => _observedEntities;
@@ -141,7 +141,7 @@ namespace GravitasDemo
 		{
 			if (capability == null) throw new ArgumentNullException(nameof(capability));
 
-			if (capability is LaunchCapability launchCap)
+			if (capability is RailgunCapability launchCap)
 			{
 				if (_launchCapability != null)
 				{
@@ -174,6 +174,7 @@ namespace GravitasDemo
 
 				_navigationCapability = navCap;
 				_navigationCapability.OwnerEntity = this;
+				_navigationCapability.Initialize();
 			}
 
 			if (capability is SensorCapability senCap)
@@ -377,9 +378,9 @@ namespace GravitasDemo
 			if (station == null || station.IsDestroyed || asteroid == null || asteroid.IsDestroyed) return;
 
 			// Setup harvesting and deposit cycle
-			EnqueueTask(new NavigateTask(asteroid, isRendezvous: true), addToLoopTemplate: true);
+			EnqueueTask(new RendezvousTask(asteroid), addToLoopTemplate: true);
 			EnqueueTask(new ExtractMassTask(_autonomyController, asteroid, extractionAmount: 100000.0, ratePerSecond: 100.0), addToLoopTemplate: true);
-			EnqueueTask(new NavigateTask(station, isRendezvous: true), addToLoopTemplate: true);
+			EnqueueTask(new RendezvousTask(station), addToLoopTemplate: true);
 			EnqueueTask(new DepositMassTask(_autonomyController, station, ratePerSecond: 200.0), addToLoopTemplate: true);
 
 			// Start with continuous infinite looping enabled
@@ -458,12 +459,12 @@ namespace GravitasDemo
 				Debug.LogWarning($"[{GetType().Name}] Cannot navigate: Target entity is null.");
 				return;
 			}
-			HandleNavigationTask(new NavigateTask(targetEntity, isRendezvous: false, arrivalThreshold, timeoutSeconds), enqueue);
+			HandleNavigationTask(new InterceptTask(targetEntity, arrivalThreshold, timeoutSeconds), enqueue);
 		}
 
 		public void InterceptPosition(double2 targetPosition, float arrivalThreshold = 10f, float timeoutSeconds = 300f, bool enqueue = false)
 		{
-			HandleNavigationTask(new NavigateTask(targetPosition, isRendezvous: false, arrivalThreshold, timeoutSeconds), enqueue);
+			HandleNavigationTask(new InterceptTask(targetPosition, arrivalThreshold, timeoutSeconds), enqueue);
 		}
 
 		public void RendezvousWithEntity(Entity targetEntity, float arrivalThreshold = 10f, float timeoutSeconds = float.PositiveInfinity, bool enqueue = false)
@@ -473,12 +474,12 @@ namespace GravitasDemo
 				Debug.LogWarning($"[{GetType().Name}] Cannot navigate: Target entity is null.");
 				return;
 			}
-			HandleNavigationTask(new NavigateTask(targetEntity, isRendezvous: true, arrivalThreshold, timeoutSeconds), enqueue);
+			HandleNavigationTask(new RendezvousTask(targetEntity, arrivalThreshold, timeoutSeconds), enqueue);
 		}
 
 		public void RendezvousWithPosition(double2 targetPosition, float arrivalThreshold = 10f, float timeoutSeconds = 300f, bool enqueue = false)
 		{
-			HandleNavigationTask(new NavigateTask(targetPosition, isRendezvous: true, arrivalThreshold, timeoutSeconds), enqueue);
+			HandleNavigationTask(new RendezvousTask(targetPosition, arrivalThreshold, timeoutSeconds), enqueue);
 		}
 
 		public void StationKeepWithEntity(Entity targetEntity, float timeoutSeconds = float.PositiveInfinity, bool enqueue = false)

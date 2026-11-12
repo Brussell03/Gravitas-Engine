@@ -54,17 +54,9 @@ namespace GravitasDemo.Rendering
 
 		[Header("GPU Map Rendering")]
 		[SerializeField] private Material _mapObjectInstancedMaterial;
-		[SerializeField] private Material _selectionRingInstancedMaterial;
-		[SerializeField] private Color _selectionRingColor = new Color(1f, 0.85f, 0.2f, 0.95f);
-		[SerializeField, Min(0f)] private float _selectionRingPaddingPixels = 4f;
-		[SerializeField, Range(0.005f, 0.15f)] private float _selectionRingThickness = 0.035f;
 		[SerializeField, Range(0, 31)] private int _mapRenderLayer = 0;
 		[SerializeField, Min(1)] private int _renderTextureResolutionScale = 1;
 
-		// Matrix-array RenderMeshInstanced draws are limited to 511 instances by default.
-		// The main map uses RenderMeshPrimitives + a structured instance buffer instead,
-		// so each sprite/material batch can be submitted in one draw with no 511-instance cap.
-		private const int MaxInstancesPerDraw = 511; // Selection rings still use matrix-array instancing.
 		private const int InitialSpriteBatchCapacity = 256;
 		private const int GpuInstanceStride = sizeof(float) * 8; // Two float4 values; 16-byte-aligned structured-buffer stride.
 		private const string MapObjectBufferShaderName = "GravitasDemo/MapObjectInstancedBuffer";
@@ -75,7 +67,6 @@ namespace GravitasDemo.Rendering
 		private static readonly int MapPositionUpID = Shader.PropertyToID("_MapPositionUp");
 		private static readonly int MapSizeRightID = Shader.PropertyToID("_MapSizeRight");
 		private static readonly int MapSizeUpID = Shader.PropertyToID("_MapSizeUp");
-		private static readonly int InstanceColorID = Shader.PropertyToID("_InstanceColor");
 
 		[StructLayout(LayoutKind.Sequential, Pack = 4)]
 		private struct MapGpuInstance
@@ -110,14 +101,7 @@ namespace GravitasDemo.Rendering
 		private RenderTexture _mapRenderTexture;
 		private Mesh _unitQuadMesh;
 		private bool _ownsMapObjectMaterial;
-		private bool _ownsSelectionRingMaterial;
 		private bool _instancingSupported;
-		private readonly Matrix4x4[] _selectionRingMatrices = new Matrix4x4[MaxInstancesPerDraw];
-		private readonly Vector4[] _selectionRingColors = new Vector4[MaxInstancesPerDraw];
-		private MaterialPropertyBlock _selectionRingProperties;
-		private RenderParams _selectionRingRenderParams;
-		private Color _cachedSelectionRingColor = new Color(float.NaN, float.NaN, float.NaN, float.NaN);
-		private float _cachedSelectionRingThickness = float.NaN;
 
 		// Cache the visualization area's basis once per frame, not once per instance.
 		private Rect _mapFrameRect;
@@ -137,11 +121,14 @@ namespace GravitasDemo.Rendering
 		private Vector3 _mapSizeUp;
 		private Bounds _mapInstanceWorldBounds;
 		private int _lastDisplayedSimulationSecond = int.MinValue;
+		private float _mapRectMinX;
+		private float _mapRectMaxX;
+		private float _mapRectMinY;
+		private float _mapRectMaxY;
 
 		private static readonly ProfilerMarker LateUpdateMarker = new ProfilerMarker("Gravitas.Map.LateUpdate");
 		private static readonly ProfilerMarker TransformAndBatchMarker = new ProfilerMarker("Gravitas.Map.TransformAndBatch");
 		private static readonly ProfilerMarker SubmitBatchesMarker = new ProfilerMarker("Gravitas.Map.SubmitBatches");
-		private static readonly ProfilerMarker SelectionBatchMarker = new ProfilerMarker("Gravitas.Map.SelectionBatches");
 		private static readonly ProfilerMarker MapCameraRenderMarker = new ProfilerMarker("Gravitas.Map.CameraRender");
 		private static readonly ProfilerMarker InstanceBufferUploadMarker = new ProfilerMarker("Gravitas.Map.InstanceBufferUpload");
 		private static readonly ProfilerMarker RenderMeshPrimitivesMarker = new ProfilerMarker("Gravitas.Map.RenderMeshPrimitives");
@@ -198,7 +185,6 @@ namespace GravitasDemo.Rendering
 
 			Debug.Log($"[{GetType().Name}] Initialized");
 
-			_selectionRingProperties = new MaterialPropertyBlock();
 			InitializeInstancedRendering();
 
 			_sceneCelestialsPool = new ObjectPool<CelestialMapObject>(CreateCelestial, OnGetFromPool, OnReleaseToPool, OnDestroyPooledObject, _collectionCheck, _defaultCapacityCelestials, _maxSizeCelestials);
@@ -362,20 +348,6 @@ namespace GravitasDemo.Rendering
 			else
 				Debug.LogError($"[{GetType().Name}] Missing {MapObjectBufferShaderName} shader.", this);
 
-			if (_selectionRingInstancedMaterial == null)
-			{
-				Shader ringShader = Shader.Find("GravitasDemo/MapObjectSelectionRing");
-				if (ringShader != null)
-				{
-					_selectionRingInstancedMaterial = new Material(ringShader);
-					_ownsSelectionRingMaterial = true;
-				}
-			}
-			if (_selectionRingInstancedMaterial != null)
-				_selectionRingInstancedMaterial.enableInstancing = true;
-			else
-				Debug.LogWarning($"[{GetType().Name}] Selection-ring shader not found; normal entities will not have instanced selection outlines.", this);
-
 			_unitQuadMesh = CreateUnitQuadMesh();
 
 			// One shared UI parent preserves the visualization area's local coordinate system
@@ -467,12 +439,6 @@ namespace GravitasDemo.Rendering
 				else DestroyImmediate(_mapObjectInstancedMaterial);
 			}
 
-			if (_ownsSelectionRingMaterial && _selectionRingInstancedMaterial != null)
-			{
-				if (Application.isPlaying) Destroy(_selectionRingInstancedMaterial);
-				else DestroyImmediate(_selectionRingInstancedMaterial);
-			}
-
 			if (_mapRenderCameraObject != null)
 			{
 				if (Application.isPlaying) Destroy(_mapRenderCameraObject);
@@ -514,7 +480,7 @@ namespace GravitasDemo.Rendering
 				else DestroyImmediate(_mapRenderTexture);
 			}
 
-			_mapRenderTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+			_mapRenderTexture = new RenderTexture(width, height, 1, RenderTextureFormat.ARGB32)
 			{
 				name = "Instanced Map Render Texture",
 				filterMode = FilterMode.Bilinear,
@@ -553,6 +519,11 @@ namespace GravitasDemo.Rendering
 			_mapWorldOrigin = _mapFrameCenterWorld
 				- _mapPositionRight * _mapFrameRect.center.x
 				- _mapPositionUp * _mapFrameRect.center.y;
+
+			_mapRectMinX = _mapFrameRect.xMin;
+			_mapRectMaxX = _mapFrameRect.xMax;
+			_mapRectMinY = _mapFrameRect.yMin;
+			_mapRectMaxY = _mapFrameRect.yMax;
 		}
 
 		private void UpdateMapCameraTransform()
@@ -718,11 +689,7 @@ namespace GravitasDemo.Rendering
 					FlushSpriteBatch(_activeSpriteBatches[i]);
 			}
 
-			bool hasSelectionRings;
-			using (SelectionBatchMarker.Auto())
-				hasSelectionRings = RenderSelectedEntityIndicators();
-
-			bool hasRenderedGeometry = _activeSpriteBatches.Count > 0 || hasSelectionRings;
+			bool hasRenderedGeometry = _activeSpriteBatches.Count > 0;
 			if (_mapRenderImage != null)
 				_mapRenderImage.enabled = hasRenderedGeometry;
 
@@ -836,79 +803,6 @@ namespace GravitasDemo.Rendering
 			return new Vector3(Mathf.Abs(value.x), Mathf.Abs(value.y), Mathf.Abs(value.z));
 		}
 
-		/// <summary>
-		/// Draws selection outlines for data-only entities. This keeps the normal-entity
-		/// path entirely free of per-entity UI indicator GameObjects as well as visual GameObjects.
-		/// </summary>
-		private bool RenderSelectedEntityIndicators()
-		{
-			if (_selectionRingInstancedMaterial == null || !_instancingSupported ||
-				SimulationInteractionController.Instance == null)
-				return false;
-
-			UpdateSelectionRingPropertiesIfNeeded();
-			IReadOnlyList<MapObject> selected = SimulationInteractionController.Instance.SelectedMapObjects;
-			int count = 0;
-			bool drewAny = false;
-			for (int i = 0; i < selected.Count; i++)
-			{
-				if (!(selected[i] is EntityMapObject entityVisual) ||
-					!CircularRaycastTarget.IsAlive(entityVisual) || entityVisual.PixelDiameter <= 0f)
-					continue;
-
-				_selectionRingMatrices[count] = GetMapObjectMatrix(
-					entityVisual, entityVisual.PixelDiameter + 2f * _selectionRingPaddingPixels, 0f);
-				count++;
-
-				if (count == MaxInstancesPerDraw)
-				{
-					FlushSelectionRingBatch(count);
-					drewAny = true;
-					count = 0;
-				}
-			}
-
-			if (count > 0)
-			{
-				FlushSelectionRingBatch(count);
-				drewAny = true;
-			}
-
-			return drewAny;
-		}
-
-		private void UpdateSelectionRingPropertiesIfNeeded()
-		{
-			if (_selectionRingProperties == null ||
-				(_cachedSelectionRingColor == _selectionRingColor && Mathf.Approximately(_cachedSelectionRingThickness, _selectionRingThickness)))
-				return;
-
-			_cachedSelectionRingColor = _selectionRingColor;
-			_cachedSelectionRingThickness = _selectionRingThickness;
-			Vector4 color = _selectionRingColor;
-			for (int i = 0; i < _selectionRingColors.Length; i++)
-				_selectionRingColors[i] = color;
-
-			_selectionRingProperties.Clear();
-			_selectionRingProperties.SetVectorArray(InstanceColorID, _selectionRingColors);
-			_selectionRingProperties.SetFloat("_RingRadius", 0.465f);
-			_selectionRingProperties.SetFloat("_RingHalfWidth", _selectionRingThickness * 0.5f);
-			_selectionRingRenderParams = new RenderParams(_selectionRingInstancedMaterial)
-			{
-				camera = _mapRenderCamera,
-				layer = _mapRenderLayer,
-				matProps = _selectionRingProperties,
-				shadowCastingMode = ShadowCastingMode.Off,
-				receiveShadows = false
-			};
-		}
-
-		private void FlushSelectionRingBatch(int count)
-		{
-			Graphics.RenderMeshInstanced(
-				_selectionRingRenderParams, _unitQuadMesh, 0, _selectionRingMatrices, count);
-		}
-
 		private void FlushSpriteBatch(SpriteBatch batch)
 		{
 			if (batch == null || batch.Count <= 0 || batch.Mesh == null || batch.Sprite == null || batch.InstanceBuffer == null)
@@ -962,11 +856,11 @@ namespace GravitasDemo.Rendering
 			Mesh mesh = new Mesh
 			{
 				name = $"Instanced Sprite Mesh - {sprite.name}",
-				 hideFlags = HideFlags.DontSave
+				hideFlags = HideFlags.DontSave,
+				vertices = vertices,
+				uv = sourceUVs,
+				triangles = triangles
 			};
-			mesh.vertices = vertices;
-			mesh.uv = sourceUVs;
-			mesh.triangles = triangles;
 			mesh.RecalculateBounds();
 			_spriteMeshCache.Add(sprite, mesh);
 			return mesh;
@@ -1036,8 +930,8 @@ namespace GravitasDemo.Rendering
 			float percX = (float)((simPosition.x - _cachedBounds.MinX) / _cachedBounds.Size.x);
 			float percY = (float)((simPosition.y - _cachedBounds.MinY) / _cachedBounds.Size.y);
 			
-			float localX = Mathf.LerpUnclamped(_visualizationArea.rect.xMin, _visualizationArea.rect.xMax, percX);
-			float localY = Mathf.LerpUnclamped(_visualizationArea.rect.yMin, _visualizationArea.rect.yMax, percY);
+			float localX = Mathf.LerpUnclamped(_mapRectMinX, _mapRectMaxX, percX);
+			float localY = Mathf.LerpUnclamped(_mapRectMinY, _mapRectMaxY, percY);
 			
 			return new Vector2(localX, localY);
 		}
@@ -1047,8 +941,8 @@ namespace GravitasDemo.Rendering
 			float percX = (float)((simPosition.x - _cachedBounds.MinX) / _cachedBounds.Size.x);
 			float percY = (float)((simPosition.y - _cachedBounds.MinY) / _cachedBounds.Size.y);
 			
-			float localX = Mathf.Lerp(_visualizationArea.rect.xMin, _visualizationArea.rect.xMax, percX);
-			float localY = Mathf.Lerp(_visualizationArea.rect.yMin, _visualizationArea.rect.yMax, percY);
+			float localX = Mathf.Lerp(_mapRectMinX, _mapRectMaxX, percX);
+			float localY = Mathf.Lerp(_mapRectMinY, _mapRectMaxY, percY);
 			
 			return new Vector2(localX, localY);
 		}
@@ -1191,8 +1085,8 @@ namespace GravitasDemo.Rendering
 			}
 
 			// Map normalized coordinates directly to the RectTransform's local rect space boundaries
-			float localX = Mathf.LerpUnclamped(_visualizationArea.rect.xMin, _visualizationArea.rect.xMax, normalizedPosition.x);
-			float localY = Mathf.LerpUnclamped(_visualizationArea.rect.yMin, _visualizationArea.rect.yMax, normalizedPosition.y);
+			float localX = Mathf.LerpUnclamped(_mapRectMinX, _mapRectMaxX, normalizedPosition.x);
+			float localY = Mathf.LerpUnclamped(_mapRectMinY, _mapRectMaxY, normalizedPosition.y);
 
 			// Retain original Z depth to avoid breaking UI layer ordering
 			target.localPosition = new Vector3(localX, localY, target.localPosition.z);
@@ -1294,7 +1188,7 @@ namespace GravitasDemo.Rendering
 
 		#endregion
 
-				#region Entity Group Pooling
+		#region Entity Group Pooling
 
 		private IObjectPool<EntityGroupMapObject> _sceneEntityGroupsPool;
 
@@ -1340,5 +1234,4 @@ namespace GravitasDemo.Rendering
 
 		#endregion
 	}
-
 }

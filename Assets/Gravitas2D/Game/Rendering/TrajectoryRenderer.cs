@@ -320,10 +320,6 @@ namespace GravitasDemo.Rendering
 				RemoveEntityTrajectory(_entitiesToRemove[i]);
 			}
 
-			Bounds2D effectiveBounds = SimulationRenderer.Instance.ViewBounds;
-			float rectWidth = SimulationRenderer.Instance.VisualizationArea.rect.width;
-			float rectHeight = SimulationRenderer.Instance.VisualizationArea.rect.height;
-
 			// Track active navigation lines and orbit match graphics for selection/pin/hover states
 			HashSet<Entity> activeNavEntities = new HashSet<Entity>();
 			HashSet<Entity> activeMatchEntities = new HashSet<Entity>();
@@ -345,7 +341,7 @@ namespace GravitasDemo.Rendering
 				}
 
 				double2[] orbitPath = ComputeTrajectory(target);
-				lineUI.RenderPathToGraphic(orbitPath, lineUI, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+				LineGraphic.RenderPathToGraphic(orbitPath, lineUI, _pathBuffer);
 
 				// Render time-to position labels along the trajectory
 				if (_timeLabels.TryGetValue(target, out var timeLabelsList) && TimeLabelsOffsets != null)
@@ -374,7 +370,7 @@ namespace GravitasDemo.Rendering
 					var navCap = target.GetCapability<NavigationCapability>();
 					if (navCap != null && navCap.IsNavigating)
 					{
-						if (navCap.IsOrbitMatchMode)
+						if (navCap.NavigationMode == NavigationMode.OrbitMatch)
 						{
 							// Orbit Match Mode: Render target orbit preview instead of a straight line
 							activeMatchEntities.Add(target);
@@ -387,11 +383,11 @@ namespace GravitasDemo.Rendering
 							PhysicsBody parentSoI = target.PhysicsBody != null ? target.PhysicsBody.ParentSoI : null;
 							if (parentSoI != null)
 							{
-								double2 tPos = navCap.TargetOrbitEntity != null && !navCap.TargetOrbitEntity.IsDestroyed ? navCap.TargetOrbitEntity.Position : parentSoI.Position + navCap.TargetOrbitPositionOffset;
-								double2 tVel = navCap.TargetOrbitEntity != null && !navCap.TargetOrbitEntity.IsDestroyed ? navCap.TargetOrbitEntity.Velocity : navCap.TargetOrbitVelocity;
+								double2 tPos = navCap.TargetEntity != null && !navCap.TargetEntity.IsDestroyed ? navCap.TargetEntity.Position : parentSoI.Position + navCap.OrbitController.TargetOrbitPositionOffset;
+								double2 tVel = navCap.TargetEntity != null && !navCap.TargetEntity.IsDestroyed ? navCap.TargetEntity.Velocity : navCap.OrbitController.TargetOrbitVelocity;
 								
 								double2[] matchPath = OrbitalMath.CalculateTwoBodyOrbit(tPos - parentSoI.Position, tVel - parentSoI.Velocity, parentSoI.Position, target.PhysicsBody.GravParam, _orbitResolution);
-								matchGraphic.RenderPathToGraphic(matchPath, matchGraphic, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+								LineGraphic.RenderPathToGraphic(matchPath, matchGraphic, _pathBuffer);
 							}
 							else
 							{
@@ -404,13 +400,9 @@ namespace GravitasDemo.Rendering
 							activeNavEntities.Add(target);
 							List<double2> path = new List<double2>();
 
-							if (navCap.IsRendezvousMode)
+							if (navCap.NavigationMode == NavigationMode.Intercept)
 							{
-								path = navCap.PredictRendezvousPath(maxTime: navCap.TimeOfFlight, steps: 300);
-							}
-							else
-							{
-								path = NavigationCapability.PredictInterceptPath(target.Position, target.Velocity, navCap.TargetPosition, navCap.TargetVelocity, target.Mass, navCap.MaxForce, target.PhysicsBody.GravParam, navCap.TimeOfFlight, target.DominantEntity.PhysicsBody, out _, steps: 150);
+								path = InterceptController.PredictInterceptPath(target.Position, target.Velocity, navCap.TargetPosition, navCap.TargetVelocity, target.Mass, navCap.MaxForce, target.PhysicsBody.GravParam, navCap.TimeOfFlight, target.DominantEntity.PhysicsBody, out _, steps: 150);
 							}
 
 							if (path != null && path.Count > 1)
@@ -421,7 +413,7 @@ namespace GravitasDemo.Rendering
 									_navLines[target] = navGraphic;
 								}
 
-								navGraphic.RenderPathToGraphic(path.ToArray(), navGraphic, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+								LineGraphic.RenderPathToGraphic(path.ToArray(), navGraphic, _pathBuffer);
 							}
 						}
 					}
@@ -465,7 +457,7 @@ namespace GravitasDemo.Rendering
 				}
 
 				double2[] soiPath = OrbitalMath.CalculateSoIBoundary(celestial.PhysicsBody, _orbitResolution);
-				soiUI.RenderPathToGraphic(soiPath, soiUI, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+				LineGraphic.RenderPathToGraphic(soiPath, soiUI, _pathBuffer);
 			}
 		}
 	}

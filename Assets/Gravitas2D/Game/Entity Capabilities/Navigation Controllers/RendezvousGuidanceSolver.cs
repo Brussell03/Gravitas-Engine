@@ -8,25 +8,26 @@ namespace GravitasDemo
 {
 	/// <summary>
 	/// Receding-horizon rendezvous guidance. The optimizer predicts the powered vehicle and
-	/// target trajectories through the live celestial gravity field, then solves for a bounded
-	/// sequence of world-space accelerations that drives terminal relative position and velocity
-	/// to zero. Only the first control interval is applied; the plan is recomputed every update.
+	/// target trajectories through the live celestial gravity field, then solves a two-phase
+	/// accelerate/brake trajectory that drives terminal relative position and velocity to zero.
+	/// Only the current control step is applied; the plan is recomputed every update.
 	/// </summary>
 	internal static class RendezvousGuidanceSolver
 	{
 		private const int ControlIntervals = 2;
-		private const int OptimizerIterations = 3;
-		private const int HorizonTrials = 5;
-		private const int HorizonRefinementIterations = 3;
-		private static readonly double[] HorizonFactors = { 0.55, 0.85, 1.15, 1.6, 2.3 };
+		private const int OptimizerIterations = 5;
+		private const int HorizonRefinementIterations = 10;
+		private const int WarmStartExpansionTrials = 4;
+		private const double HorizonExpansionFactor = 1.35;
 
-		// A plan is owned by one NavigationCapability. After the first feasible solve, the
-		// previous second-segment control is an excellent warm start for the next frame.
-		// This avoids repeating the expensive horizon scan on every physics tick.
+		// A plan is owned by one NavigationCapability. Both phase controls are retained so
+		// the next receding-horizon solve starts from the previous accelerate/brake solution.
 		internal sealed class PlanMemory
 		{
 			public bool HasPlan;
+			public double2 CurrentControl;
 			public double2 FutureControl;
+			public double FirstPhaseDuration;
 			public double LastSolveMilliseconds;
 			public int LastTerminalEvaluationCount;
 			public int LastVehicleIntegrationStepCount;
@@ -35,7 +36,9 @@ namespace GravitasDemo
 			public void Reset()
 			{
 				HasPlan = false;
+				CurrentControl = double2.zero;
 				FutureControl = double2.zero;
+				FirstPhaseDuration = 0.0;
 				LastSolveMilliseconds = 0.0;
 				LastTerminalEvaluationCount = 0;
 				LastVehicleIntegrationStepCount = 0;
@@ -120,14 +123,66 @@ namespace GravitasDemo
 		}
 
 		/// <summary>
-		/// Finds a bounded receding-horizon control. Returns false only when the input state is
-		/// invalid; the caller should use its completion test before invoking this method.
+		/// Value-only vehicle data required by the rendezvous predictor. GravityBodyIndex is
+		/// the physics body's index used to exclude the vehicle from its own gravity field;
+		/// use -1 when predicting a vehicle that is not registered in the physics world.
+		/// </summary>
+		internal struct VehicleInput
+		{
+			public double2 Position;
+			public double2 Velocity;
+			public double Mass;
+			public int GravityBodyIndex;
+
+			public VehicleInput(double2 position, double2 velocity, double mass, int gravityBodyIndex = -1)
+			{
+				Position = position;
+				Velocity = velocity;
+				Mass = mass;
+				GravityBodyIndex = gravityBodyIndex;
+			}
+		}
+
+		/// <summary>
+		/// Value-only target data. CenterPosition/CenterVelocity describe the body's centre;
+		/// PositionOffset is added to its predicted centre position at arrival. For a free-space
+		/// waypoint, set IsDynamic=false, GravityBodyIndex=-1, and use the waypoint as the centre
+		/// position with zero offset. A non-celestial dynamic body is propagated through gravity;
+		/// a celestial body is sampled from the shared gravity ephemeris.
+		/// </summary>
+		internal struct TargetInput
+		{
+			public double2 CenterPosition;
+			public double2 CenterVelocity;
+			public double2 PositionOffset;
+			public bool IsDynamic;
+			public bool IsCelestial;
+			public int GravityBodyIndex;
+
+			public TargetInput(
+				double2 centerPosition,
+				double2 centerVelocity,
+				double2 positionOffset,
+				bool isDynamic = false,
+				bool isCelestial = false,
+				int gravityBodyIndex = -1)
+			{
+				CenterPosition = centerPosition;
+				CenterVelocity = centerVelocity;
+				PositionOffset = positionOffset;
+				IsDynamic = isDynamic;
+				IsCelestial = isCelestial;
+				GravityBodyIndex = gravityBodyIndex;
+			}
+		}
+
+		/// <summary>
+		/// Finds a bounded receding-horizon control using only value data; no Entity instances
+		/// are required. Returns false when the supplied state or vehicle model is invalid.
 		/// </summary>
 		public static bool TrySolve(
-			Entity owner,
-			Entity targetEntity,
-			double2 targetPosition,
-			double2 targetVelocity,
+			VehicleInput vehicle,
+			TargetInput target,
 			double maxForce,
 			double arrivalThreshold,
 			double velocityThreshold,
@@ -147,16 +202,16 @@ namespace GravitasDemo
 			commandedAcceleration = double2.zero;
 			timeOfFlight = 0f;
 
-			if (owner == null || owner.IsDestroyed || owner.PhysicsBody == null ||
-				owner.Mass <= 0.0 || maxForce <= 0.0 ||
-				!IsFinite(owner.Position) || !IsFinite(owner.Velocity) ||
-				!IsFinite(targetPosition) || !IsFinite(targetVelocity))
+			if (vehicle.Mass <= 0.0 || maxForce <= 0.0 ||
+				!IsFinite(vehicle.Position) || !IsFinite(vehicle.Velocity) ||
+				!IsFinite(target.CenterPosition) || !IsFinite(target.CenterVelocity) ||
+				!IsFinite(target.PositionOffset))
 			{
 				FinishTiming(stopwatch, planMemory);
 				return false;
 			}
 
-			double maxAcceleration = maxForce / owner.Mass;
+			double maxAcceleration = maxForce / vehicle.Mass;
 			if (!IsFinite(maxAcceleration) || maxAcceleration <= MinimumAcceleration)
 			{
 				FinishTiming(stopwatch, planMemory);
@@ -170,8 +225,10 @@ namespace GravitasDemo
 			arrivalThreshold = math.max(0.01, arrivalThreshold);
 			velocityThreshold = math.max(0.01, velocityThreshold);
 
-			double2 initialRelativePosition = targetPosition - owner.Position;
-			double2 initialRelativeVelocity = targetVelocity - owner.Velocity;
+			double2 targetPosition = target.CenterPosition + target.PositionOffset;
+			double2 targetVelocity = target.CenterVelocity;
+			double2 initialRelativePosition = targetPosition - vehicle.Position;
+			double2 initialRelativeVelocity = targetVelocity - vehicle.Velocity;
 			double initialDistance = math.length(initialRelativePosition);
 			double initialRelativeSpeed = math.length(initialRelativeVelocity);
 			if (!IsFinite(initialDistance) || !IsFinite(initialRelativeSpeed))
@@ -180,94 +237,92 @@ namespace GravitasDemo
 				return false;
 			}
 
+			// The initial estimate is only used to bracket the minimum-time solve. The final
+			// time is found by repeatedly testing the complete two-phase trajectory.
 			double distanceTime = 2.0 * math.sqrt(math.max(0.0, initialDistance) / maxAcceleration);
 			double velocityTime = 2.0 * initialRelativeSpeed / maxAcceleration;
-			double seedTime = math.max(controlStep * 12.0, math.max(distanceTime, velocityTime));
-			if (IsFinite(previousTimeOfFlight) && previousTimeOfFlight > controlStep * 4.0)
-				seedTime = math.max(seedTime * 0.65, math.min(seedTime, previousTimeOfFlight * 0.9));
-			seedTime = math.clamp(seedTime, math.min(controlStep * 8.0, maxPredictionTime / 2.8), maxPredictionTime / 2.8);
+			double seedTime = math.max(controlStep * 8.0, distanceTime + velocityTime);
+			double minimumHorizon = controlStep * 4.0;
+			seedTime = math.clamp(seedTime, minimumHorizon, maxPredictionTime);
 
 			double positionTolerance = math.max(0.001, arrivalThreshold * 0.10);
 			double velocityTolerance = math.max(0.001, math.min(velocityThreshold * 0.5, 0.25));
 			double positionScale = math.max(positionTolerance, initialDistance * 0.01);
 			double velocityScale = math.max(velocityTolerance, initialRelativeSpeed * 0.01);
 
-			double2 targetCenterPosition = targetEntity != null ? targetEntity.Position : targetPosition;
-			double2 targetCenterVelocity = targetEntity != null ? targetEntity.Velocity : targetVelocity;
-			double2 targetOffset = targetPosition - targetCenterPosition;
-			int ownerIndex = owner.PhysicsBody.Index;
-			int targetIndex = targetEntity != null ? targetEntity.PhysicsBody.Index : -1;
-			bool targetIsDynamic = targetEntity != null;
+			double2 targetCenterPosition = target.CenterPosition;
+			double2 targetCenterVelocity = target.CenterVelocity;
+			double2 targetOffset = target.PositionOffset;
+			int ownerIndex = vehicle.GravityBodyIndex;
+			int targetIndex = target.GravityBodyIndex;
+			bool targetIsDynamic = target.IsDynamic;
+
+			// Keep the ephemeris coverage large enough for the initial bracket and any warm-start
+			// expansion, without eagerly requesting the full seven-day safety horizon.
+			bool useWarmStart = planMemory != null && planMemory.HasPlan &&
+				previousTimeOfFlight > controlStep * 4.0 && predictedPath == null;
+			double previousRemaining = useWarmStart
+				? math.max(minimumHorizon, previousTimeOfFlight - controlStep)
+				: 0.0;
+			double searchMaximumHorizon = math.min(maxPredictionTime,
+				math.max(seedTime * 4.0, previousRemaining * 2.0));
+			searchMaximumHorizon = math.max(minimumHorizon, searchMaximumHorizon);
 
 			PhysicsManager2D manager = PhysicsManager2D.Instance;
-			double maximumTrialHorizon = math.clamp(seedTime * HorizonFactors[HorizonTrials - 1],
-				controlStep * 4.0, maxPredictionTime);
-			if (planMemory != null && planMemory.HasPlan && previousTimeOfFlight > controlStep * 4.0 && predictedPath == null)
-				maximumTrialHorizon = math.max(maximumTrialHorizon,
-					math.min(maxPredictionTime, previousTimeOfFlight * 2.0));
-
 			GravityEphemerisView gravity = manager != null && manager.IsInitialized
-				? GetSharedGravityEphemeris(manager, maximumTrialHorizon)
+				? GetSharedGravityEphemeris(manager, searchMaximumHorizon)
 				: default;
 			LastGravityEphemerisSegmentCount = gravity.SegmentCount;
 
-			int targetGravitySource = targetEntity != null && targetEntity.IsCelestial
+			int targetGravitySource = target.IsDynamic && target.IsCelestial
 				? gravity.FindSource(targetIndex)
 				: -1;
 			DynamicState initialState = new DynamicState
 			{
-				Position = owner.Position,
-				Velocity = owner.Velocity,
+				Position = vehicle.Position,
+				Velocity = vehicle.Velocity,
 				TargetCenterPosition = targetCenterPosition,
 				TargetCenterVelocity = targetCenterVelocity
 			};
 
+			// Used only by the bounded fallback controller. Normal TOF and phase selection
+			// use an RK4-propagated coast state inside OptimizeHorizon.
+			double2 ownerGravity = gravity.AccelerationAt(vehicle.Position, 0.0, ownerIndex);
+			double2 targetGravity = targetIsDynamic
+				? gravity.AccelerationAt(targetCenterPosition + targetOffset, 0.0, targetIndex)
+				: double2.zero;
+			double2 differentialGravity = targetGravity - ownerGravity;
+
 			PlanResult best = default;
 			bool foundFeasible = false;
-			double minimumHorizon = controlStep * 4.0;
+			bool hasInfeasibleLowerBound = false;
+			double lowerInfeasibleHorizon = minimumHorizon;
+			double upperFeasibleHorizon = 0.0;
+			// Advance the cached phase schedule by the elapsed control interval. If the old
+			// accelerate phase ended during that interval, the previous braking vector becomes
+			// the current warm-start vector; otherwise retain the current/future pair.
+			double remainingFirstPhase = useWarmStart
+				? planMemory.FirstPhaseDuration - controlStep
+				: 0.0;
+			double2[] warmControls = useWarmStart
+				? (remainingFirstPhase > controlStep * 0.05
+					? new double2[] { planMemory.CurrentControl, planMemory.FutureControl }
+					: new double2[] { planMemory.FutureControl, planMemory.FutureControl })
+				: null;
 
-			// Steady-state MPC: keep the previously solved arrival time, subtract the elapsed
-			// control interval, and warm-start with the old coast/burn segment. A prior feasible
-			// two-segment solution naturally shifts to [old segment 2, old segment 2]. This turns
-			// the normal per-tick workload into one bounded shooting solve instead of 5 scans + 3
-			// binary-search solves. Re-expand only when the warm-started plan loses feasibility.
-			bool useWarmStart = planMemory != null && planMemory.HasPlan &&
-				previousTimeOfFlight > controlStep * 4.0 && predictedPath == null;
 			if (useWarmStart)
 			{
-				double horizon = math.clamp(previousTimeOfFlight - controlStep, minimumHorizon, maxPredictionTime);
-				for (int trial = 0; trial < 3; trial++)
+				// Start from the previous feasible arrival time, shifted by elapsed simulation
+				// time. A normal warm-start solve is one optimization pass; only re-expand and
+				// refine the horizon if model error makes the shifted estimate infeasible.
+				double horizon = previousRemaining;
+				for (int trial = 0; trial <= WarmStartExpansionTrials; trial++)
 				{
-					if (trial == 1) horizon = math.min(maxPredictionTime, horizon * 1.25);
-					else if (trial == 2) horizon = math.min(maxPredictionTime, horizon * 1.5);
-					double[] durations = MakeControlDurations(horizon, controlStep);
-					double2[] warmControls = { planMemory.FutureControl, planMemory.FutureControl };
 					PlanResult candidate = OptimizeHorizon(
 						initialState, targetIsDynamic, targetGravitySource,
-						ownerIndex, targetIndex, targetOffset, durations, gravity,
+						ownerIndex, targetIndex, targetOffset, horizon, controlStep, gravity,
 						maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance,
 						warmControls);
-					if (candidate.Valid && (!best.Valid || candidate.Score < best.Score)) best = candidate;
-					if (candidate.Feasible)
-					{
-						best = candidate;
-						foundFeasible = true;
-						break;
-					}
-				}
-			}
-			else
-			{
-				double lowerInfeasibleHorizon = minimumHorizon;
-				double upperFeasibleHorizon = 0.0;
-				for (int trial = 0; trial < HorizonTrials; trial++)
-				{
-					double horizon = math.clamp(seedTime * HorizonFactors[trial], minimumHorizon, maxPredictionTime);
-					double[] durations = MakeControlDurations(horizon, controlStep);
-					PlanResult candidate = OptimizeHorizon(
-						initialState, targetIsDynamic, targetGravitySource,
-						ownerIndex, targetIndex, targetOffset, durations, gravity,
-						maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance);
 					if (candidate.Valid && (!best.Valid || candidate.Score < best.Score)) best = candidate;
 					if (candidate.Feasible)
 					{
@@ -276,27 +331,79 @@ namespace GravitasDemo
 						upperFeasibleHorizon = horizon;
 						break;
 					}
+
 					lowerInfeasibleHorizon = horizon;
+					hasInfeasibleLowerBound = true;
+					if (trial < WarmStartExpansionTrials)
+						horizon = math.min(searchMaximumHorizon, math.max(horizon + controlStep, horizon * HorizonExpansionFactor));
+					if (horizon >= searchMaximumHorizon - 1e-9 && trial < WarmStartExpansionTrials)
+						break;
 				}
 
-				if (foundFeasible && upperFeasibleHorizon > lowerInfeasibleHorizon + controlStep)
+			}
+			else
+			{
+				// Establish a true infeasible/feasible bracket. The lower bound is checked
+				// explicitly instead of being inferred from a coarse seed-time multiplier.
+				PlanResult minimumCandidate = OptimizeHorizon(
+					initialState, targetIsDynamic, targetGravitySource,
+					ownerIndex, targetIndex, targetOffset, minimumHorizon, controlStep, gravity,
+					maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance);
+				if (minimumCandidate.Valid) best = minimumCandidate;
+				if (minimumCandidate.Feasible)
 				{
-					for (int i = 0; i < HorizonRefinementIterations; i++)
+					best = minimumCandidate;
+					foundFeasible = true;
+					upperFeasibleHorizon = minimumHorizon;
+				}
+				else
+				{
+					hasInfeasibleLowerBound = true;
+					double horizon = math.max(seedTime, minimumHorizon * 1.25);
+					for (int trial = 0; trial < 8; trial++)
 					{
-						double horizon = 0.5 * (lowerInfeasibleHorizon + upperFeasibleHorizon);
-						double[] durations = MakeControlDurations(horizon, controlStep);
+						horizon = math.min(searchMaximumHorizon, horizon);
 						PlanResult candidate = OptimizeHorizon(
 							initialState, targetIsDynamic, targetGravitySource,
-							ownerIndex, targetIndex, targetOffset, durations, gravity,
-							maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance,
-							best.Controls);
+							ownerIndex, targetIndex, targetOffset, horizon, controlStep, gravity,
+							maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance);
+						if (candidate.Valid && (!best.Valid || candidate.Score < best.Score)) best = candidate;
 						if (candidate.Feasible)
 						{
 							best = candidate;
+							foundFeasible = true;
 							upperFeasibleHorizon = horizon;
+							break;
 						}
-						else lowerInfeasibleHorizon = horizon;
+						lowerInfeasibleHorizon = horizon;
+						if (horizon >= searchMaximumHorizon - 1e-9) break;
+						horizon = math.min(searchMaximumHorizon, horizon * HorizonExpansionFactor);
 					}
+				}
+			}
+
+			// Refine a bounded minimum-time bracket. Feasibility is evaluated using the actual
+			// gravity-integrated vehicle and target states, not the constant-gravity seed model.
+			if (foundFeasible && hasInfeasibleLowerBound &&
+				upperFeasibleHorizon > lowerInfeasibleHorizon + controlStep * 0.05)
+			{
+				for (int i = 0; i < HorizonRefinementIterations; i++)
+				{
+					double horizon = 0.5 * (lowerInfeasibleHorizon + upperFeasibleHorizon);
+					PlanResult candidate = OptimizeHorizon(
+						initialState, targetIsDynamic, targetGravitySource,
+						ownerIndex, targetIndex, targetOffset, horizon, controlStep, gravity,
+						maxAcceleration, positionScale, velocityScale, positionTolerance, velocityTolerance,
+						best.Controls);
+					if (candidate.Feasible)
+					{
+						best = candidate;
+						upperFeasibleHorizon = horizon;
+					}
+					else lowerInfeasibleHorizon = horizon;
+
+					double timeTolerance = math.max(controlStep * 0.1, upperFeasibleHorizon * 1e-4);
+					if (upperFeasibleHorizon - lowerInfeasibleHorizon <= timeTolerance) break;
 				}
 			}
 
@@ -306,21 +413,23 @@ namespace GravitasDemo
 				timeOfFlight = (float)math.min(best.Horizon, float.MaxValue);
 				if (planMemory != null)
 				{
+					planMemory.CurrentControl = best.Controls != null && best.Controls.Length > 0
+						? best.Controls[0]
+						: best.FirstAcceleration;
 					planMemory.FutureControl = best.Controls != null && best.Controls.Length > 1
 						? best.Controls[1]
 						: best.FirstAcceleration;
-					planMemory.HasPlan = best.Feasible || useWarmStart;
+					planMemory.FirstPhaseDuration = best.Durations != null && best.Durations.Length > 0
+						? best.Durations[0]
+						: 0.0;
+					planMemory.HasPlan = best.Feasible;
 				}
 			}
 			else
 			{
-				double2 ownerGravity = gravity.AccelerationAt(owner.Position, 0.0, ownerIndex);
-				double2 targetGravity = targetIsDynamic
-					? gravity.AccelerationAt(targetCenterPosition, 0.0, targetIndex)
-					: double2.zero;
 				double omega = math.sqrt(maxAcceleration / math.max(initialDistance, arrivalThreshold));
 				omega = math.min(omega, 0.25 / controlStep);
-				commandedAcceleration = (targetGravity - ownerGravity)
+				commandedAcceleration = differentialGravity
 					+ initialRelativePosition * (omega * omega)
 					+ initialRelativeVelocity * (2.0 * omega);
 				commandedAcceleration = ClampMagnitude(commandedAcceleration, maxAcceleration);
@@ -335,8 +444,8 @@ namespace GravitasDemo
 						gravity, targetIsDynamic, targetGravitySource, ownerIndex, targetIndex);
 				else
 					BuildPredictedPath(predictedPath, pathSamples, initialState,
-						MakeConstantControls(commandedAcceleration, timeOfFlight, controlStep),
-						MakeControlDurations(math.max(controlStep * 4.0, timeOfFlight), controlStep),
+						MakeConstantControls(commandedAcceleration),
+						MakeEqualPhaseDurations(math.max(controlStep * 4.0, timeOfFlight)),
 						gravity, targetIsDynamic, targetGravitySource, ownerIndex, targetIndex);
 			}
 
@@ -364,7 +473,8 @@ namespace GravitasDemo
 			int ownerIndex,
 			int targetIndex,
 			double2 targetOffset,
-			double[] durations,
+			double horizon,
+			double controlStep,
 			GravityEphemerisView gravity,
 			double maxAcceleration,
 			double positionScale,
@@ -373,9 +483,15 @@ namespace GravitasDemo
 			double velocityTolerance,
 			double2[] warmStartControls = null)
 		{
-			int count = durations.Length;
-			double horizon = 0.0;
-			for (int i = 0; i < count; i++) horizon += durations[i];
+			// Propagate the no-thrust reference trajectory through the same gravity ephemeris
+			// used by the powered rollout. This gives the phase scheduler a much better estimate
+			// than assuming the departure gravity vector remains constant for the entire flight.
+			GetCoastRelativeState(initialState, horizon, gravity, targetIsDynamic,
+				targetGravitySource, ownerIndex, targetIndex, targetOffset,
+				out double2 coastRelativePosition, out double2 coastRelativeVelocity);
+			double[] durations = MakeControlDurations(
+				horizon, controlStep, coastRelativePosition, coastRelativeVelocity);
+			int count = ControlIntervals;
 			double2[] controls = new double2[count];
 
 			if (warmStartControls != null && warmStartControls.Length == count)
@@ -384,27 +500,16 @@ namespace GravitasDemo
 			}
 			else
 			{
-				// Analytic double-integrator seed. It is corrected by the gravity-aware
-				// variational shooting solve below.
-				double2 initialRelativePosition = initialState.TargetCenterPosition + targetOffset - initialState.Position;
-				double2 initialRelativeVelocity = initialState.TargetCenterVelocity - initialState.Velocity;
-				double2 targetGravity = targetIsDynamic
-					? gravity.AccelerationAt(initialState.TargetCenterPosition + targetOffset, 0.0, targetIndex)
-					: double2.zero;
-				double2 initialDifferentialGravity = targetGravity - gravity.AccelerationAt(initialState.Position, 0.0, ownerIndex);
-				double h1 = durations[0];
-				double h2 = durations[1];
-				double a = h1 * (0.5 * h1 + h2);
-				double b = 0.5 * h2 * h2;
-				double determinant = (h1 * b) - (h2 * a);
-				double2 requiredVelocityIntegral = initialRelativeVelocity + initialDifferentialGravity * horizon;
-				double2 requiredPositionIntegral = initialRelativePosition
-					+ initialRelativeVelocity * horizon
-					+ 0.5 * initialDifferentialGravity * horizon * horizon;
-				if (math.abs(determinant) > 1e-18)
+				// Two-phase double-integrator seed based on the gravity-propagated coast endpoint.
+				// The variational shooting solve then corrects for gravity changes caused by the
+				// powered trajectory departing from that coast reference.
+				if (TryGetTwoPhaseAccelerations(
+					coastRelativePosition, coastRelativeVelocity,
+					durations[0], durations[1],
+					out double2 firstSeed, out double2 secondSeed))
 				{
-					controls[0] = ClampMagnitude((requiredVelocityIntegral * b - requiredPositionIntegral * h2) / determinant, maxAcceleration);
-					controls[1] = ClampMagnitude((requiredPositionIntegral * h1 - requiredVelocityIntegral * a) / determinant, maxAcceleration);
+					controls[0] = ClampMagnitude(firstSeed, maxAcceleration);
+					controls[1] = ClampMagnitude(secondSeed, maxAcceleration);
 				}
 			}
 
@@ -453,9 +558,9 @@ namespace GravitasDemo
 				}
 
 				bool accepted = false;
-				for (int lineSearch = 0; lineSearch < 2; lineSearch++)
+				for (int lineSearch = 0; lineSearch < 3; lineSearch++)
 				{
-					double alpha = lineSearch == 0 ? 1.0 : 0.5;
+					double alpha = lineSearch == 0 ? 1.0 : lineSearch == 1 ? 0.5 : 0.25;
 					double2[] candidateControls = new double2[count];
 					for (int i = 0; i < count; i++)
 						candidateControls[i] = ClampMagnitude(controls[i] + delta[i] * alpha, maxAcceleration);
@@ -504,12 +609,9 @@ namespace GravitasDemo
 			}
 		}
 
-		private static double2[] MakeConstantControls(double2 acceleration, double horizon, double controlStep)
+		private static double2[] MakeConstantControls(double2 acceleration)
 		{
-			double[] durations = MakeControlDurations(math.max(controlStep * 4.0, horizon), controlStep);
-			double2[] controls = new double2[durations.Length];
-			for (int i = 0; i < controls.Length; i++) controls[i] = acceleration;
-			return controls;
+			return new double2[] { acceleration, acceleration };
 		}
 
 		private static void BuildPredictedPath(
@@ -860,15 +962,177 @@ namespace GravitasDemo
 			};
 		}
 
-		private static double[] MakeControlDurations(double horizon, double controlStep)
+		private static void GetCoastRelativeState(
+			DynamicState initialState,
+			double horizon,
+			GravityEphemerisView gravity,
+			bool targetIsDynamic,
+			int targetGravitySource,
+			int ownerIndex,
+			int targetIndex,
+			double2 targetOffset,
+			out double2 relativePosition,
+			out double2 relativeVelocity)
 		{
-			double[] durations = new double[ControlIntervals];
-			double first = math.min(controlStep, horizon * 0.5);
-			durations[0] = first;
-			double remainder = math.max(1e-6, horizon - first);
-			double rest = remainder / (ControlIntervals - 1);
-			for (int i = 1; i < durations.Length; i++) durations[i] = rest;
-			return durations;
+			DynamicState coastState = initialState;
+			IntegrateInterval(ref coastState, 0.0, horizon, double2.zero, gravity,
+				targetIsDynamic, targetGravitySource, ownerIndex, targetIndex);
+
+			double2 targetPosition;
+			double2 targetVelocity;
+			if (targetGravitySource >= 0)
+				gravity.SourceStateAt(targetGravitySource, horizon, out targetPosition, out targetVelocity);
+			else
+			{
+				targetPosition = coastState.TargetCenterPosition;
+				targetVelocity = coastState.TargetCenterVelocity;
+			}
+
+			relativePosition = targetPosition + targetOffset - coastState.Position;
+			relativeVelocity = targetVelocity - coastState.Velocity;
+		}
+
+		/// <summary>
+		/// Splits the prediction into a sustained acceleration phase and a braking phase.
+		/// The split is selected from the two-phase constant-acceleration boundary solution,
+		/// minimizing the larger required phase acceleration. The phase boundary is quantized
+		/// to guidance-step boundaries so the receding-horizon controller can switch cleanly.
+		/// </summary>
+		private static double[] MakeControlDurations(
+			double horizon,
+			double controlStep,
+			double2 coastRelativePosition,
+			double2 coastRelativeVelocity)
+		{
+			double minimumPhase = math.min(controlStep, horizon * 0.5);
+			double lower = minimumPhase;
+			double upper = horizon - minimumPhase;
+			if (upper <= lower + 1e-9)
+				return new double[] { horizon * 0.5, horizon * 0.5 };
+
+			// Coarse global scan avoids assuming a perfectly unimodal cost when the initial
+			// relative velocity is strongly transverse to the line of sight.
+			const int samples = 13;
+			double sampleStep = (upper - lower) / (samples - 1);
+			double bestDuration = horizon * 0.5;
+			double bestCost = double.PositiveInfinity;
+			for (int i = 0; i < samples; i++)
+			{
+				double candidateDuration = lower + sampleStep * i;
+				double cost = TwoPhaseAccelerationCost(
+					coastRelativePosition, coastRelativeVelocity,
+					horizon, candidateDuration);
+				if (cost < bestCost)
+				{
+					bestCost = cost;
+					bestDuration = candidateDuration;
+				}
+			}
+
+			double refineLower = math.max(lower, bestDuration - sampleStep);
+			double refineUpper = math.min(upper, bestDuration + sampleStep);
+			const double goldenRatio = 0.6180339887498948482;
+			double x1 = refineUpper - goldenRatio * (refineUpper - refineLower);
+			double x2 = refineLower + goldenRatio * (refineUpper - refineLower);
+			double f1 = TwoPhaseAccelerationCost(coastRelativePosition, coastRelativeVelocity,
+				horizon, x1);
+			double f2 = TwoPhaseAccelerationCost(coastRelativePosition, coastRelativeVelocity,
+				horizon, x2);
+			for (int i = 0; i < 18; i++)
+			{
+				if (f1 <= f2)
+				{
+					refineUpper = x2;
+					x2 = x1;
+					f2 = f1;
+					x1 = refineUpper - goldenRatio * (refineUpper - refineLower);
+					f1 = TwoPhaseAccelerationCost(coastRelativePosition, coastRelativeVelocity,
+						horizon, x1);
+				}
+				else
+				{
+					refineLower = x1;
+					x1 = x2;
+					f1 = f2;
+					x2 = refineLower + goldenRatio * (refineUpper - refineLower);
+					f2 = TwoPhaseAccelerationCost(coastRelativePosition, coastRelativeVelocity,
+						horizon, x2);
+				}
+			}
+
+			double refinedDuration = f1 <= f2 ? x1 : x2;
+			refinedDuration = math.clamp(refinedDuration, lower, upper);
+
+			// Phase transitions must happen on a guidance update. Otherwise a continuous-time
+			// switch (for example 1.4 control steps after launch) cannot be represented by the
+			// controller, which holds one acceleration for the whole next physics interval.
+			int maximumWholeSteps = math.max(1, (int)math.floor((upper + 1e-9) / controlStep));
+			int lowerSteps = math.clamp((int)math.floor(refinedDuration / controlStep), 1, maximumWholeSteps);
+			int upperSteps = math.min(maximumWholeSteps, lowerSteps + 1);
+			double lowerDuration = lowerSteps * controlStep;
+			double upperDuration = upperSteps * controlStep;
+			bestDuration = TwoPhaseAccelerationCost(coastRelativePosition, coastRelativeVelocity,
+				horizon, lowerDuration) <= TwoPhaseAccelerationCost(
+				coastRelativePosition, coastRelativeVelocity, horizon, upperDuration)
+				? lowerDuration
+				: upperDuration;
+			return new double[] { bestDuration, horizon - bestDuration };
+		}
+
+		// Equal-duration split used only for fallback path visualization, where no solved
+		// two-phase timing is available.
+		private static double[] MakeEqualPhaseDurations(double horizon)
+		{
+			double half = math.max(1e-6, horizon * 0.5);
+			return new double[] { half, math.max(1e-6, horizon - half) };
+		}
+
+		private static double TwoPhaseAccelerationCost(
+			double2 coastRelativePosition,
+			double2 coastRelativeVelocity,
+			double horizon,
+			double firstDuration)
+		{
+			double secondDuration = horizon - firstDuration;
+			if (firstDuration <= 1e-9 || secondDuration <= 1e-9)
+				return double.PositiveInfinity;
+
+			if (!TryGetTwoPhaseAccelerations(coastRelativePosition, coastRelativeVelocity,
+				firstDuration, secondDuration, out double2 first, out double2 second))
+				return double.PositiveInfinity;
+			double firstMagnitude = math.length(first);
+			double secondMagnitude = math.length(second);
+			if (!IsFinite(firstMagnitude) || !IsFinite(secondMagnitude))
+				return double.PositiveInfinity;
+			return math.max(firstMagnitude, secondMagnitude);
+		}
+
+		private static bool TryGetTwoPhaseAccelerations(
+			double2 relativePosition,
+			double2 relativeVelocity,
+			double firstDuration,
+			double secondDuration,
+			out double2 firstAcceleration,
+			out double2 secondAcceleration)
+		{
+			firstAcceleration = double2.zero;
+			secondAcceleration = double2.zero;
+			// relativePosition/Velocity are the coast-propagated target-minus-vehicle residuals.
+			// The two vehicle-control phases must supply exactly that terminal displacement
+			// and velocity change to bring the relative state to zero.
+			double2 requiredVelocityChange = relativeVelocity;
+			double2 requiredPositionChange = relativePosition;
+			double firstPositionWeight = firstDuration * (0.5 * firstDuration + secondDuration);
+			double secondPositionWeight = 0.5 * secondDuration * secondDuration;
+			double determinant = firstDuration * secondPositionWeight
+				- secondDuration * firstPositionWeight;
+			if (math.abs(determinant) <= 1e-18 || !IsFinite(determinant)) return false;
+
+			firstAcceleration = (requiredVelocityChange * secondPositionWeight
+				- requiredPositionChange * secondDuration) / determinant;
+			secondAcceleration = (requiredPositionChange * firstDuration
+				- requiredVelocityChange * firstPositionWeight) / determinant;
+			return IsFinite(firstAcceleration) && IsFinite(secondAcceleration);
 		}
 
 		private static double Score(TerminalError error, double2[] controls, double maxAcceleration)
@@ -935,6 +1199,5 @@ namespace GravitasDemo
 		private static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 		private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 		private static bool IsFinite(double2 value) => IsFinite(value.x) && IsFinite(value.y);
-
 	}
 }

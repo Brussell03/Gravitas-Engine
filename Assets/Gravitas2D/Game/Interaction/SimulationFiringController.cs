@@ -166,12 +166,12 @@ namespace GravitasDemo.Interaction
 						VehicleModel model = VehicleModel.CreateFromComposition(launcher.ProjectileRadius, launcher.ProjectileCompositionIndex);
 						double muMissile = OrbitalMath.GetStandardGravitationalParameter(parent.Mass, model.Mass);
 
-						_interceptTime = NavigationCapability.ComputeInterceptTimeOfFlight(_firingEntity.Position, _firingEntity.Velocity, targetEntity.Position, targetEntity.Velocity, model.Mass, NavigationCapability.MaxMissileForce, muMissile, parent);
+						_interceptTime = InterceptController.ComputeInterceptTimeOfFlight(_firingEntity.Position, _firingEntity.Velocity, targetEntity.Position, targetEntity.Velocity, model.Mass, NavigationCapability.MaxMissileForce, muMissile, parent);
 						_hasValidLock = true;
 
 						OrbitalMath.GetLocalStateAtTime(targetEntity.Position, targetEntity.Velocity, parent, _interceptTime, targetEntity.PhysicsBody.GravParam, out _, out double2 targetVelAtIntercept);
 
-						List<double2> path = NavigationCapability.PredictInterceptPath(_firingEntity.Position, _firingEntity.Velocity, targetEntity.Position, targetEntity.Velocity, model.Mass, NavigationCapability.MaxMissileForce, muMissile, _interceptTime, _firingEntity.DominantEntity.PhysicsBody, out double2 missileVelAtIntercept, steps: 200);
+						List<double2> path = InterceptController.PredictInterceptPath(_firingEntity.Position, _firingEntity.Velocity, targetEntity.Position, targetEntity.Velocity, model.Mass, NavigationCapability.MaxMissileForce, muMissile, _interceptTime, _firingEntity.DominantEntity.PhysicsBody, out double2 missileVelAtIntercept, steps: 200);
 
 						double2 normalAtIntercept = -math.normalize(targetVelAtIntercept - missileVelAtIntercept);
 
@@ -192,12 +192,8 @@ namespace GravitasDemo.Interaction
 								_pathBuffer = new Vector2[path.Count];
 							}
 
-							Bounds2D effectiveBounds = SimulationRenderer.Instance.ViewBounds;
-							float rectWidth = SimulationRenderer.Instance.VisualizationArea.rect.width;
-							float rectHeight = SimulationRenderer.Instance.VisualizationArea.rect.height;
-
 							_orbitPreviewLine.gameObject.SetActive(true);
-							_orbitPreviewLine.RenderPathToGraphic(path, _orbitPreviewLine, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+							LineGraphic.RenderPathToGraphic(path, _orbitPreviewLine, _pathBuffer);
 						}
 					}
 				}
@@ -206,7 +202,7 @@ namespace GravitasDemo.Interaction
 					// Projectile interceptors require a solved analytical interception trajectory
 					if (_firingEntity.IsLauncher && _firingEntity.LaunchCapability.Ammo > 0)
 					{
-						LaunchCapability launcher = _firingEntity.LaunchCapability;
+						RailgunCapability launcher = _firingEntity.LaunchCapability;
 						VehicleModel model = VehicleModel.CreateFromComposition(launcher.ProjectileRadius, launcher.ProjectileCompositionIndex);
 						PhysicsBody parent = _firingEntity.PhysicsBody != null ? _firingEntity.PhysicsBody.ParentSoI : null;
 
@@ -245,12 +241,8 @@ namespace GravitasDemo.Interaction
 									_pathBuffer = new Vector2[resolution];
 								}
 
-								Bounds2D effectiveBounds = SimulationRenderer.Instance.ViewBounds;
-								float rectWidth = SimulationRenderer.Instance.VisualizationArea.rect.width;
-								float rectHeight = SimulationRenderer.Instance.VisualizationArea.rect.height;
-
 								_orbitPreviewLine.gameObject.SetActive(true);
-								_orbitPreviewLine.RenderPathToGraphic(orbitPoints, _orbitPreviewLine, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+								LineGraphic.RenderPathToGraphic(orbitPoints, _orbitPreviewLine, _pathBuffer);
 							}
 						}
 					}
@@ -294,7 +286,7 @@ namespace GravitasDemo.Interaction
 			if (!_firingEntity.IsLauncher || targetEntity == null) return;
 			if (_firingEntity.LaunchCapability.Ammo <= 0) return;
 
-			LaunchCapability launcher = _firingEntity.LaunchCapability;
+			RailgunCapability launcher = _firingEntity.LaunchCapability;
 
 			VehicleModel model = VehicleModel.CreateFromComposition(launcher.ProjectileRadius, launcher.ProjectileCompositionIndex);
 
@@ -332,7 +324,7 @@ namespace GravitasDemo.Interaction
 				WarheadCapability.Missile
 			};
 
-			var navTask = new NavigateTask(targetEntity);
+			var navTask = new InterceptTask(targetEntity);
 
 			EntityCreation.Create($"Missile {++_numMissileSpawned}", model, spawnPos, initialVelocity, _firingEntity.Orientation, 0, launcher.ProjectileCompositionIndex, true, EntityType.Missile, BodySpawnOptions.Default, capabilities, navTask);
 			launcher.Ammo--;

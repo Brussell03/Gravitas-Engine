@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Gravitas2D;
 using GravitasDemo.Rendering;
 using Unity.Mathematics;
@@ -127,11 +128,43 @@ namespace GravitasDemo.Interaction
 
 			if (_isIntercept)
 			{
-				tof = NavigationCapability.ComputeInterceptTimeOfFlight(_navigatingEntity.Position, _navigatingEntity.Velocity, hoveredEntity.Position, hoveredEntity.Velocity, _navigatingEntity.Mass, maxForce, mu, parent);
+				tof = InterceptController.ComputeInterceptTimeOfFlight(_navigatingEntity.Position, _navigatingEntity.Velocity, hoveredEntity.Position, hoveredEntity.Velocity, _navigatingEntity.Mass, maxForce, mu, parent);
 			}
 			else
 			{
-				tof = NavigationCapability.ComputeRendezvousTimeOfFlight(_navigatingEntity.Position, _navigatingEntity.Velocity, hoveredEntity.Position, hoveredEntity.Velocity, _navigatingEntity.Mass, maxForce, mu, parent);
+				// tof = NavigationCapability.ComputeRendezvousTimeOfFlight(_navigatingEntity.Position, _navigatingEntity.Velocity, hoveredEntity.Position, hoveredEntity.Velocity, _navigatingEntity.Mass, maxForce, mu, parent);
+				var vehicleInput = new RendezvousGuidanceSolver.VehicleInput(
+					_navigatingEntity.Position,
+					_navigatingEntity.Velocity,
+					_navigatingEntity.Mass,
+					_navigatingEntity.PhysicsBody.Index);
+
+				var targetInput = new RendezvousGuidanceSolver.TargetInput(
+					hoveredEntity.Position,
+					hoveredEntity.Velocity,
+					RendezvousController.GetRendezvousOffset(_navigatingEntity.Position, _navigatingEntity.Radius, hoveredEntity, _navigatingEntity.InGroup, _navigatingEntity.Group, _navigatingEntity.Group?.IndexOfMember(_navigatingEntity) ?? -1),
+					hoveredEntity != null,
+					hoveredEntity?.IsCelestial ?? false,
+					hoveredEntity?.PhysicsBody.Index ?? -1);
+
+				// List<double2> predictedPath = new List<double2>();
+				// Vector2[] pathBuffer = new Vector2[1];
+				if (!RendezvousGuidanceSolver.TrySolve(
+					vehicleInput,
+					targetInput,
+					maxForce,
+					100,
+					1,
+					PhysicsManager2D.Instance.PhysicsTimeStep,
+					0,
+					out _,
+					out tof/*,
+					predictedPath*/))
+				{
+					tof = 0;
+				}
+
+				// LineGraphic.RenderPathToGraphic(predictedPath, _navLine, pathBuffer);
 			}
 
 			color = _navLineColor;

@@ -157,30 +157,27 @@ namespace GravitasDemo
 		}
 	}
 
-	public class NavigateTask : IAutonomousTask
+	public class InterceptTask : IAutonomousTask
 	{
-		public string TaskName => "NavigateTask";
+		public string TaskName => "InterceptTask";
 		public TaskStatus Status { get; private set; } = TaskStatus.Pending;
 
 		private readonly Entity _targetEntity;
 		private readonly double2 _targetPosition;
-		private readonly bool _isRendezvous;
 		private readonly float _arrivalThreshold;
 		private readonly float _timeoutSeconds;
 		private float _elapsedTime = 0f;
 
-		public NavigateTask(Entity targetEntity, bool isRendezvous = false, float arrivalThreshold = 10f, float timeoutSeconds = float.PositiveInfinity)
+		public InterceptTask(Entity targetEntity, float arrivalThreshold = 10f, float timeoutSeconds = float.PositiveInfinity)
 		{
 			_targetEntity = targetEntity ?? throw new ArgumentNullException(nameof(targetEntity));
-			_isRendezvous = isRendezvous;
 			_arrivalThreshold = arrivalThreshold;
 			_timeoutSeconds = timeoutSeconds;
 		}
 
-		public NavigateTask(double2 targetPosition, bool isRendezvous = false, float arrivalThreshold = 10f, float timeoutSeconds = 300f)
+		public InterceptTask(double2 targetPosition, float arrivalThreshold = 10f, float timeoutSeconds = 300f)
 		{
 			_targetPosition = targetPosition;
-			_isRendezvous = isRendezvous;
 			_arrivalThreshold = arrivalThreshold;
 			_timeoutSeconds = timeoutSeconds;
 		}
@@ -197,57 +194,43 @@ namespace GravitasDemo
 				return;
 			}
 
-			navCap.EndNavigation();
-			navCap.ArrivalThreshold = _arrivalThreshold;
-			navCap.IsRendezvousMode = _isRendezvous;
-			navCap.IsStationKeepingMode = false;
-			navCap.IsOrbitMatchMode = false;
-
-			if (_targetEntity != null)
-			{
-				navCap.TargetEntity = _targetEntity;
-			}
-			else
-			{
-				navCap.TargetPosition = _targetPosition;
-			}
-
-			navCap.IsNavigating = true;
-			navCap.IsEnabled = true;
+			navCap.EnterIntercept(_arrivalThreshold, _targetEntity, _targetPosition);
 		}
 
 		public TaskStatus Tick(Entity entity, float dt)
 		{
 			if (Status != TaskStatus.Running) return Status;
 
+			var navCap = entity.NavigationCapability;
+
+			// Check for failures
+			if (navCap == null || !navCap.IsNavigating)
+			{
+				Status = TaskStatus.Failed;
+			}
+
 			_elapsedTime += dt;
 			if (_elapsedTime >= _timeoutSeconds)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
 			if (_targetEntity != null && _targetEntity.IsDestroyed)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
 			// Evaluate navigation step directly from the active task
 			UpdateNavigation(entity, dt);
 
-			var navCap = entity.GetCapability<NavigationCapability>();
-			if (_isRendezvous && navCap != null && navCap.RendezvousSolutionFailed)
+			if (navCap != null && navCap.CheckCompleted(dt))
 			{
-				Status = TaskStatus.Failed;
-				navCap.EndNavigation();
-			}
-			else if (navCap == null || !navCap.IsNavigating)
-			{
-				// Navigation finished successfully
 				Status = TaskStatus.Completed;
+				navCap.EndNavigation();
 			}
 
 			return Status;
@@ -258,12 +241,11 @@ namespace GravitasDemo
 			Status = TaskStatus.Aborted;
 			entity.GetCapability<NavigationCapability>()?.EndNavigation();
 		}
+
 		public void UpdateNavigation(Entity entity, float dt)
 		{
 			var navCap = entity.GetCapability<NavigationCapability>();
 			if (navCap == null || !navCap.IsNavigating) return;
-
-			dt = navCap.PrepareAttitudeControl(dt);
 
 			if (navCap.TargetEntity != null && navCap.TargetEntity.IsDestroyed)
 			{
@@ -271,48 +253,132 @@ namespace GravitasDemo
 				return;
 			}
 
-			bool trajectoryComputed = navCap.IsRendezvousMode
-				? navCap.ComputeRendezvousTrajectory(dt)
-				: navCap.ComputeInterceptTrajectory();
+			bool trajectoryComputed = navCap.UpdateIntercept();
+			
+			navCap.UpdateAttitude(navCap.BurnOrientation, dt);
 
 			if (trajectoryComputed)
 			{
 				float burnAngle = navCap.BurnOrientation;
-				navCap.UpdateTargetOrientation(burnAngle, dt);
-				navCap.IsEnabled = true;
 
-				float analogTorque = navCap.EvaluateAnalogTorque(dt);
-				if (analogTorque != 0f)
-				{
-					entity.PhysicsBody.AddTorque(analogTorque);
-				}
-
-				float throttle = navCap.IsRendezvousMode ? navCap.BurnThrottle : 1f;
-				float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * (navCap.MaxForce * throttle);
-				if (throttle > 1e-5f)
+				float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * (navCap.MaxForce * navCap.BurnThrottle);
+				if (navCap.BurnThrottle > 1e-5f)
 					entity.PhysicsBody.AddWorldForce(worldForce);
 
-				// Use the actual guidance aim point (including rendezvous clearance) and its
-				// matching velocity. The previous check used the target centre for entity targets
-				// and compared position against velocity for position targets.
-				double distanceToTarget = math.distance(entity.Position, navCap.TargetPosition);
-				double relativeSpeed = math.distance(entity.Velocity, navCap.TargetVelocity);
-
-				bool arrived = navCap.IsRendezvousMode
-					? (distanceToTarget <= navCap.ArrivalThreshold && relativeSpeed <= navCap.RendezvousVelocityThreshold)
-					: (distanceToTarget <= navCap.ArrivalThreshold);
-
-				if (arrived)
-				{
-					navCap.EndNavigation();
-				}
+				Debug.Log(navCap.TimeOfFlight);
 			}
-			else if (!navCap.IsRendezvousMode || navCap.TimeOfFlight == 0f)
+		}
+	}
+
+	public class RendezvousTask : IAutonomousTask
+	{
+		public string TaskName => "RendezvousTask";
+		public TaskStatus Status { get; private set; } = TaskStatus.Pending;
+
+		private readonly Entity _targetEntity;
+		private readonly double2 _targetPosition;
+		private readonly float _arrivalThreshold;
+		private readonly float _timeoutSeconds;
+		private float _elapsedTime = 0f;
+
+		public RendezvousTask(Entity targetEntity, float arrivalThreshold = 10f, float timeoutSeconds = float.PositiveInfinity)
+		{
+			_targetEntity = targetEntity ?? throw new ArgumentNullException(nameof(targetEntity));
+			_arrivalThreshold = arrivalThreshold;
+			_timeoutSeconds = timeoutSeconds;
+		}
+
+		public RendezvousTask(double2 targetPosition, float arrivalThreshold = 10f, float timeoutSeconds = 300f)
+		{
+			_targetPosition = targetPosition;
+			_arrivalThreshold = arrivalThreshold;
+			_timeoutSeconds = timeoutSeconds;
+		}
+
+		public void OnStart(Entity entity)
+		{
+			Status = TaskStatus.Running;
+			_elapsedTime = 0f;
+
+			var navCap = entity.GetCapability<NavigationCapability>();
+			if (navCap == null)
 			{
-				// A rendezvous solver returning false with Tgo == 0 means the terminal
-				// position-and-relative-velocity capture condition was met. A failed/invalid
-				// solve must not be silently reported as a completed navigation task.
+				Status = TaskStatus.Failed;
+				return;
+			}
+
+			navCap.EnterRendezvous(_arrivalThreshold, _targetEntity, _targetPosition);
+		}
+
+		public TaskStatus Tick(Entity entity, float dt)
+		{
+			if (Status != TaskStatus.Running) return Status;
+
+			var navCap = entity.NavigationCapability;
+
+			// Check for failures
+			if (navCap == null || !navCap.IsNavigating)
+			{
+				Status = TaskStatus.Failed;
+			}
+
+			_elapsedTime += dt;
+			if (_elapsedTime >= _timeoutSeconds)
+			{
+				Status = TaskStatus.Failed;
 				navCap.EndNavigation();
+				return Status;
+			}
+
+			if (_targetEntity != null && _targetEntity.IsDestroyed)
+			{
+				Status = TaskStatus.Failed;
+				navCap.EndNavigation();
+				return Status;
+			}
+
+			// Evaluate navigation step directly from the active task
+			UpdateNavigation(entity, dt);
+
+			if (navCap != null && navCap.CheckCompleted(dt))
+			{
+				Status = TaskStatus.Completed;
+				navCap.EndNavigation();
+			}
+
+			return Status;
+		}
+
+		public void OnAbort(Entity entity)
+		{
+			Status = TaskStatus.Aborted;
+			entity.GetCapability<NavigationCapability>()?.EndNavigation();
+		}
+
+		public void UpdateNavigation(Entity entity, float dt)
+		{
+			var navCap = entity.GetCapability<NavigationCapability>();
+			if (navCap == null || !navCap.IsNavigating) return;
+
+			if (navCap.TargetEntity != null && navCap.TargetEntity.IsDestroyed)
+			{
+				navCap.EndNavigation();
+				return;
+			}
+
+			bool trajectoryComputed = navCap.UpdateRendezvous(dt);
+			
+			navCap.UpdateAttitude(navCap.BurnOrientation, dt);
+
+			if (trajectoryComputed)
+			{
+				float burnAngle = navCap.BurnOrientation;
+
+				float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * (navCap.MaxForce * navCap.BurnThrottle);
+				if (navCap.BurnThrottle > 1e-5f)
+					entity.PhysicsBody.AddWorldForce(worldForce);
+
+				Debug.Log(navCap.TimeOfFlight);
 			}
 		}
 	}
@@ -351,40 +417,33 @@ namespace GravitasDemo
 				return;
 			}
 
-			navCap.EndNavigation();
-			navCap.IsStationKeepingMode = true;
-			navCap.IsRendezvousMode = false;
-			navCap.IsOrbitMatchMode = false;
-
-			if (_targetEntity != null)
-			{
-				navCap.TargetEntity = _targetEntity;
-			}
-			else
-			{
-				navCap.TargetPosition = _targetPosition;
-			}
-
-			navCap.IsNavigating = true;
-			navCap.IsEnabled = true;
+			navCap.EnterStationKeep(_targetEntity, _targetPosition);
 		}
 
 		public TaskStatus Tick(Entity entity, float dt)
 		{
 			if (Status != TaskStatus.Running) return Status;
 
+			var navCap = entity.NavigationCapability;
+
+			// Check for failures
+			if (navCap == null || !navCap.IsNavigating)
+			{
+				Status = TaskStatus.Failed;
+			}
+
 			_elapsedTime += dt;
 			if (_elapsedTime >= _timeoutSeconds)
 			{
-				Status = TaskStatus.Completed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				Status = TaskStatus.Failed;
+				navCap.EndNavigation();
 				return Status;
 			}
 
 			if (_targetEntity != null && _targetEntity.IsDestroyed)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
@@ -403,42 +462,25 @@ namespace GravitasDemo
 			var navCap = entity.GetCapability<NavigationCapability>();
 			if (navCap == null || !navCap.IsNavigating) return;
 
-			dt = navCap.PrepareAttitudeControl(dt);
-
 			if (navCap.TargetEntity != null && navCap.TargetEntity.IsDestroyed)
 			{
 				navCap.EndNavigation();
 				return;
 			}
 
-			bool trajectoryComputed = navCap.ComputeStationKeepingTrajectory();
+			bool trajectoryComputed = navCap.UpdateStationKeep();
+			
+			navCap.UpdateAttitude(navCap.BurnOrientation, dt);
+
 			if (trajectoryComputed)
 			{
 				float burnAngle = navCap.BurnOrientation;
-				navCap.UpdateTargetOrientation(burnAngle, dt);
-				navCap.IsEnabled = true;
-
-				float analogTorque = navCap.EvaluateAnalogTorque(dt);
-				if (analogTorque != 0f)
-				{
-					entity.PhysicsBody.AddTorque(analogTorque);
-				}
-
-				double2 targetPos = navCap.TargetEntity != null ? navCap.TargetEntity.Position : navCap.TargetPosition;
-				double2 targetVel = navCap.TargetEntity != null ? navCap.TargetEntity.Velocity : navCap.TargetVelocity;
-
-				double2 positionError = targetPos - entity.Position;
-				double2 velocityError = entity.Velocity - targetVel;
-
-				double2 desiredAccel = (positionError * 0.2) - (velocityError * 1.5);
-				double desiredForce = math.length(desiredAccel) * entity.Mass;
-
-				float throttle = (float)math.clamp(desiredForce / navCap.MaxForce, 0.0, 1.0);
+				
 				float2 vehicleForward = new float2(math.cos(entity.Orientation), math.sin(entity.Orientation));
 				float2 burnDir = new float2(math.cos(burnAngle), math.sin(burnAngle));
 				float alignment = math.max(0f, math.dot(vehicleForward, burnDir));
 
-				float2 worldForce = vehicleForward * (navCap.MaxForce * throttle * alignment);
+				float2 worldForce = vehicleForward * (navCap.MaxForce * navCap.BurnThrottle * alignment);
 				if (!navCap.RequireAttitudeAlignmentForThrust || navCap.IsBurnAligned(dt))
 				{
 					entity.PhysicsBody.AddWorldForce(worldForce);
@@ -486,51 +528,51 @@ namespace GravitasDemo
 				return;
 			}
 
-			navCap.EndNavigation();
-			navCap.IsOrbitMatchMode = true;
-			navCap.IsRendezvousMode = false;
-			navCap.IsStationKeepingMode = false;
-
 			if (_useEntity)
 			{
-				navCap.TargetOrbitEntity = _targetOrbitEntity;
+				navCap.EnterOrbitMatch(_targetOrbitEntity);
 			}
 			else
 			{
 				PhysicsBody parentSoI = entity.PhysicsBody != null ? entity.PhysicsBody.ParentSoI : null;
-				navCap.TargetOrbitPositionOffset = parentSoI != null ? _targetOrbitPosition - parentSoI.Position : _targetOrbitPosition;
-				navCap.TargetOrbitVelocity = _targetOrbitVelocity;
+				double2 targetOrbitPositionOffset = parentSoI != null ? _targetOrbitPosition - parentSoI.Position : _targetOrbitPosition;
+				navCap.EnterOrbitMatch(_targetOrbitEntity, targetOrbitPositionOffset, _targetOrbitVelocity);
 			}
-
-			navCap.IsNavigating = true;
-			navCap.IsEnabled = true;
 		}
 
 		public TaskStatus Tick(Entity entity, float dt)
 		{
 			if (Status != TaskStatus.Running) return Status;
 
+			var navCap = entity.NavigationCapability;
+
+			// Check for failures
+			if (navCap == null || !navCap.IsNavigating)
+			{
+				Status = TaskStatus.Failed;
+			}
+
 			_elapsedTime += dt;
 			if (_elapsedTime >= _timeoutSeconds)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
-			if (_useEntity && (_targetOrbitEntity == null || _targetOrbitEntity.IsDestroyed))
+			if (_useEntity && _targetOrbitEntity != null && _targetOrbitEntity.IsDestroyed)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
 			UpdateNavigation(entity, dt);
 
-			var navCap = entity.GetCapability<NavigationCapability>();
-			if (navCap == null || !navCap.IsNavigating)
+			if (navCap != null && navCap.CheckCompleted(dt))
 			{
 				Status = TaskStatus.Completed;
+				navCap.EndNavigation();
 			}
 
 			return Status;
@@ -547,76 +589,17 @@ namespace GravitasDemo
 			var navCap = entity.GetCapability<NavigationCapability>();
 			if (navCap == null || !navCap.IsNavigating) return;
 
-			dt = navCap.PrepareAttitudeControl(dt);
-			bool trajectoryComputed = navCap.ComputeOrbitMatchTrajectory();
+			bool trajectoryComputed = navCap.UpdateOrbitMatch(dt);
+
+			navCap.UpdateAttitude(navCap.BurnOrientation, dt);
 
 			if (trajectoryComputed)
 			{
 				float burnAngle = navCap.BurnOrientation;
-				navCap.UpdateTargetOrientation(burnAngle, dt);
-				navCap.IsEnabled = true;
-
-				float analogTorque = navCap.EvaluateAnalogTorque(dt);
-				if (analogTorque != 0f)
+				if (navCap.BurnThrottle > 1e-4 && (!navCap.RequireAttitudeAlignmentForThrust || navCap.IsBurnAligned(dt)))
 				{
-					entity.PhysicsBody.AddTorque(analogTorque);
-				}
-
-				PhysicsBody parentSoI = navCap.TargetOrbitEntity != null && !navCap.TargetOrbitEntity.IsDestroyed && navCap.TargetOrbitEntity.PhysicsBody != null
-					? navCap.TargetOrbitEntity.PhysicsBody.ParentSoI
-					: entity.PhysicsBody.ParentSoI;
-
-				if (parentSoI != null)
-				{
-					double2 tPos = navCap.TargetOrbitEntity != null && !navCap.TargetOrbitEntity.IsDestroyed ? navCap.TargetOrbitEntity.Position : parentSoI.Position + navCap.TargetOrbitPositionOffset;
-					double2 tVel = navCap.TargetOrbitEntity != null && !navCap.TargetOrbitEntity.IsDestroyed ? navCap.TargetOrbitEntity.Velocity : navCap.TargetOrbitVelocity;
-
-					double mu = entity.PhysicsBody.GravParam;
-					double2 rT = tPos - parentSoI.Position;
-					double2 vT = tVel - parentSoI.Velocity;
-					double rTDist = math.length(rT);
-					double2 rC = entity.Position - parentSoI.Position;
-					double2 vC = entity.Velocity - parentSoI.Velocity;
-					double rCDist = math.length(rC);
-
-					if (mu > 0.0 && rTDist > 1.0 && rCDist > 1.0)
-					{
-						double targetEnergy = (math.lengthsq(vT) * 0.5) - (mu / rTDist);
-						double targetH = (rT.x * vT.y) - (rT.y * vT.x);
-						double currEnergy = (math.lengthsq(vC) * 0.5) - (mu / rCDist);
-						double currH = (rC.x * vC.y) - (rC.y * vC.x);
-
-						if (math.abs(targetEnergy) > 1e-12 && math.abs(currEnergy) > 1e-12 && math.abs(targetH) > 1e-9)
-						{
-							double targetA = -mu / (2.0 * targetEnergy);
-							double currA = -mu / (2.0 * currEnergy);
-							double2 targetEcc = new double2((vT.y * targetH / mu) - (rT.x / rTDist), (-vT.x * targetH / mu) - (rT.y / rTDist));
-							double2 currEcc = new double2((vC.y * currH / mu) - (rC.x / rCDist), (-vC.x * currH / mu) - (rC.y / rCDist));
-
-							bool aMatch = math.abs(currA - targetA) <= math.abs(targetA) * 0.002;
-							bool hMatch = math.abs(currH - targetH) <= math.max(math.abs(targetH) * 0.002, 1e-6);
-							bool eMatch = math.length(targetEcc) < 0.003
-								? math.abs(math.length(currEcc) - math.length(targetEcc)) <= 0.0005
-								: math.length(currEcc - targetEcc) <= math.max(1e-4, math.length(targetEcc) * 0.01);
-
-							if (aMatch && hMatch && eMatch)
-							{
-								navCap.EndNavigation();
-							}
-							else
-							{
-								double maxAccel = navCap.MaxForce / math.max(1e-12, entity.Mass);
-								double responseTime = math.max(math.max(0.25, navCap.OrbitMatchResponseTime), 2.0 * math.max(0.0, dt));
-								double throttle = maxAccel * responseTime > 0.0 ? math.clamp(navCap.RequiredOrbitMatchDeltaV / (maxAccel * responseTime), 0.0, 1.0) : 0.0;
-
-								if (throttle > 1e-4 && (!navCap.RequireAttitudeAlignmentForThrust || navCap.IsBurnAligned(dt)))
-								{
-									float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * navCap.MaxForce * (float)throttle;
-									entity.PhysicsBody.AddWorldForce(worldForce);
-								}
-							}
-						}
-					}
+					float2 worldForce = new float2(math.cos(burnAngle), math.sin(burnAngle)) * navCap.MaxForce * (float)navCap.BurnThrottle;
+					entity.PhysicsBody.AddWorldForce(worldForce);
 				}
 			}
 		}
@@ -656,20 +639,28 @@ namespace GravitasDemo
 		{
 			if (Status != TaskStatus.Running) return Status;
 
+			var navCap = entity.NavigationCapability;
+
+			// Check for failures
+			if (navCap == null || !navCap.IsNavigating)
+			{
+				Status = TaskStatus.Failed;
+			}
+
 			_elapsedTime += dt;
 			if (_elapsedTime >= _timeoutSeconds)
 			{
 				Status = TaskStatus.Failed;
-				entity.GetCapability<NavigationCapability>()?.EndNavigation();
+				navCap.EndNavigation();
 				return Status;
 			}
 
 			UpdateNavigation(entity, dt);
 
-			var navCap = entity.GetCapability<NavigationCapability>();
-			if (navCap != null && navCap.IsBurnAligned(dt))
+			if (navCap != null && navCap.CheckCompleted(dt))
 			{
 				Status = TaskStatus.Completed;
+				navCap.EndNavigation();
 			}
 
 			return Status;
@@ -686,13 +677,7 @@ namespace GravitasDemo
 			var navCap = entity.GetCapability<NavigationCapability>();
 			if (navCap == null) return;
 
-			dt = navCap.PrepareAttitudeControl(dt);
-			navCap.UpdateTargetOrientation(navCap.TargetOrientation, dt);
-			float analogTorque = navCap.EvaluateAnalogTorque(dt);
-			if (analogTorque != 0f)
-			{
-				entity.PhysicsBody.AddTorque(analogTorque);
-			}
+			navCap.UpdateAttitude(navCap.TargetOrientation, dt);
 		}
 	}
 

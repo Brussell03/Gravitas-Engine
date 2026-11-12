@@ -483,6 +483,18 @@ namespace Gravitas2D
 					if (activation.RemainingDelay <= 0f)
 					{
 						int idx = activation.Body.Index;
+						
+						// Validate that the body still occupies its expected slot.
+						if (idx < 0 ||
+							idx >= _isCollidableMap.Length ||
+							idx >= _physicsBodies.Count ||
+							_physicsBodies[idx] != activation.Body)
+						{
+							_collisionActivations.RemoveAt(i);
+							continue;
+						}
+
+						// Safely activate collisions.
 						_isCollidableMap[idx] = true;
 						_collisionActivations.RemoveAt(i);
 					}

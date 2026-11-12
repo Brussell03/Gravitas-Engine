@@ -237,12 +237,8 @@ namespace GravitasDemo.Interaction
 			double mass = _navigatingEntity.Mass;
 			double mu = OrbitalMath.GetStandardGravitationalParameter(parent.Mass, mass);
 			double2[] path = OrbitalMath.CalculateTwoBodyOrbit(targetPos - parent.Position, velocity - parent.Velocity, parent.Position, mu, _previewOrbitResolution);
-			
-			Bounds2D effectiveBounds = SimulationRenderer.Instance.ViewBounds;
-			float rectWidth = SimulationRenderer.Instance.VisualizationArea.rect.width;
-			float rectHeight = SimulationRenderer.Instance.VisualizationArea.rect.height;
 
-			_previewTrajectory.RenderPathToGraphic(path, _previewTrajectory, _pathBuffer, effectiveBounds, rectWidth, rectHeight);
+			LineGraphic.RenderPathToGraphic(path, _previewTrajectory, _pathBuffer);
 			_previewTrajectory.gameObject.SetActive(true);
 		}
 

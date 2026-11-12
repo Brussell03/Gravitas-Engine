@@ -70,7 +70,7 @@ namespace GravitasDemo.Rendering
 			SetVerticesDirty();
 		}
 
-		public void RenderPathToGraphic(double2[] path, LineGraphic graphic, Vector2[] pathBuffer, Bounds2D bounds, float width, float height)
+		public static void RenderPathToGraphic(double2[] path, LineGraphic graphic, Vector2[] pathBuffer)
 		{
 			if (pathBuffer.Length != path.Length)
 			{
@@ -85,7 +85,7 @@ namespace GravitasDemo.Rendering
 			graphic.SetPoints(pathBuffer);
 		}
 
-		public void RenderPathToGraphic(List<double2> path, LineGraphic graphic, Vector2[] pathBuffer, Bounds2D bounds, float width, float height)
+		public static void RenderPathToGraphic(List<double2> path, LineGraphic graphic, Vector2[] pathBuffer)
 		{
 			if (pathBuffer.Length != path.Count)
 			{
